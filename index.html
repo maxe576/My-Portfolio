@@ -2733,27 +2733,48 @@ function _meParseDate(v){
   const iso=s.match(/^\d{4}-\d{2}-\d{2}/); if(iso) return iso[0];
   return s||null;
 }
-function parseMaxPortfolio(rows){
-  const header=rows[0]||[];
-  let iT=_meColIdx(header,['ticker','symbol']), iS=_meColIdx(header,['shares','qty','quantity']),
-      iC=_meColIdx(header,['cost basis','cost']), iA=_meColIdx(header,['avg stock price buy','avg cost','avg','average']);
-  if(iT<0)iT=0; if(iS<0)iS=1; if(iC<0)iC=2; if(iA<0)iA=3;
+// Find the real header row (files often have a title/banner on row 0). Returns the
+// index of the first row (within the first 30) that contains >=2 of the anchor tokens.
+function _meHeaderIdx(rows, anchors){
+  for(let i=0;i<Math.min(rows.length,30);i++){ const row=rows[i]||[]; const seen={}; let hits=0;
+    for(const c of row){ const h=String(c==null?'':c).trim().toLowerCase(); if(!h)continue;
+      for(const a of anchors){ if(!seen[a] && (h===a||h.indexOf(a)>=0)){ seen[a]=1; hits++; } } }
+    if(hits>=2) return i;
+  }
+  return 0;
+}
+function _meMakeHolding(tk, shares, cost, avg){
+  const en=_meEnrich(tk);
+  if((!avg||isNaN(avg))&&shares)avg=cost/shares; avg=avg||0;
+  if((!cost||isNaN(cost))&&shares&&avg)cost=shares*avg; cost=cost||0;
+  const price=avg||0, mv=shares*price;
+  return {ticker:tk,company:en.company,shares:shares,costBasis:cost,avgCost:avg,price:price,marketValue:mv,dayPct:0,dayDollar:0,glDollar:mv-cost,glPct:cost?(mv-cost)/cost:0,sector:en.sector,beta:en.beta,type:en.type,fund:'Max Evans Portfolio'};
+}
+// Holdings sheet: "Portfolio" (Ticker/Shares/Cost Basis/Avg…) or "Positions"/"Holdings".
+function parseMaxHoldings(rows){
+  const hi=_meHeaderIdx(rows,['ticker','symbol','shares','cost']); const header=rows[hi]||[];
+  const iT=_meColIdx(header,['ticker','symbol']), iS=_meColIdx(header,['shares held','shares','quantity']),
+        iC=_meColIdx(header,['remaining cost basis','cost basis','current basis','cost']),
+        iA=_meColIdx(header,['average cost / share','avg stock price buy','average cost','avg cost','avg','average']);
   const equities=[],etfs=[]; let total=0;
-  for(let r=1;r<rows.length;r++){ const row=rows[r]; if(!row)continue;
-    const tk=row[iT]!=null?String(row[iT]).trim().toUpperCase():''; if(!tk||tk==='TICKER')continue;
-    const shares=Number(row[iS])||0; const cost=Number(row[iC])||0; let avg=Number(row[iA]); if((!avg||isNaN(avg))&&shares)avg=cost/shares; avg=avg||0;
-    const en=_meEnrich(tk); const price=avg||0, mv=shares*price; total+=cost;
-    const h={ticker:tk,company:en.company,shares:shares,costBasis:cost,avgCost:avg,price:price,marketValue:mv,dayPct:0,dayDollar:0,glDollar:mv-cost,glPct:cost?(mv-cost)/cost:0,sector:en.sector,beta:en.beta,type:en.type,fund:'Max Evans Portfolio'};
-    (en.type==='etf'?etfs:equities).push(h);
+  if(iT<0) return {equities,etfs,total};
+  for(let r=hi+1;r<rows.length;r++){ const row=rows[r]; if(!row)continue;
+    const tk=row[iT]!=null?String(row[iT]).trim().toUpperCase():''; if(!tk||tk==='TICKER'||tk==='SYMBOL')continue;
+    const shares=Number(iS>=0?row[iS]:0)||0; if(!(shares>0))continue;
+    const h=_meMakeHolding(tk, shares, Number(iC>=0?row[iC]:0)||0, Number(iA>=0?row[iA]:NaN));
+    total+=h.costBasis; (h.type==='etf'?etfs:equities).push(h);
   }
   return {equities,etfs,total};
 }
-function parseMaxTransactions(rows){
-  const header=rows[0]||[];
+// Transactions sheet: "Transactions" or "All Transactions". Also captures the running
+// "Current Shares/Basis" columns (tracker exports) so positions can be derived.
+function parseMaxTx(rows){
+  const hi=_meHeaderIdx(rows,['date','action','symbol','ticker','quantity','amount']); const header=rows[hi]||[];
   const iD=_meColIdx(header,['date']), iAct=_meColIdx(header,['action']), iT=_meColIdx(header,['ticker','symbol']),
-        iS=_meColIdx(header,['shares','qty']), iP=_meColIdx(header,['price']), iAmt=_meColIdx(header,['amount']);
-  const out=[];
-  for(let r=1;r<rows.length;r++){ const row=rows[r]; if(!row)continue;
+        iS=_meColIdx(header,['quantity','shares']), iP=_meColIdx(header,['price']), iAmt=_meColIdx(header,['net amount','amount']),
+        iCur=_meColIdx(header,['current shares']), iCurB=_meColIdx(header,['current basis']), iAvg=_meColIdx(header,['average cost / share','average cost']);
+  const out=[]; const running={};
+  for(let r=hi+1;r<rows.length;r++){ const row=rows[r]; if(!row)continue;
     const date=_meParseDate(iD>=0?row[iD]:null);
     const action=(iAct>=0&&row[iAct]!=null)?String(row[iAct]).trim():'';
     const ticker=(iT>=0&&row[iT]!=null&&String(row[iT]).trim())?String(row[iT]).trim().toUpperCase():null;
@@ -2762,9 +2783,29 @@ function parseMaxTransactions(rows){
     const amount=(iAmt>=0&&row[iAmt]!=null&&row[iAmt]!=='')?Number(row[iAmt]):null;
     if(!date && !ticker && amount==null && !action) continue;
     out.push({date,ticker,action,shares:(shares!=null&&!isNaN(shares))?shares:null,price:(price!=null&&!isNaN(price))?price:null,amount:(amount!=null&&!isNaN(amount))?amount:null,fund:'Max Evans Portfolio'});
+    if(ticker && iCur>=0){ const cs=Number(row[iCur]); if(!isNaN(cs)) running[ticker]={shares:cs,cost:Number(iCurB>=0?row[iCurB]:NaN),avg:Number(iAvg>=0?row[iAvg]:NaN)}; }
   }
   out.sort((a,b)=>(a.date||'').localeCompare(b.date||''));
-  return out;
+  return {transactions:out, running:running};
+}
+// When there is no usable holdings sheet, rebuild positions from the transaction rows.
+function deriveHoldingsFromTx(txList, running){
+  const equities=[],etfs=[]; let total=0;
+  if(running && Object.keys(running).length){
+    for(const tk in running){ const p=running[tk]; if(!(p.shares>0))continue;
+      const h=_meMakeHolding(tk,p.shares,(!isNaN(p.cost)?p.cost:0),(!isNaN(p.avg)?p.avg:NaN)); total+=h.costBasis; (h.type==='etf'?etfs:equities).push(h); }
+    if(equities.length||etfs.length) return {equities,etfs,total};
+  }
+  const acc={};
+  for(const t of (txList||[])){ if(!t.ticker)continue; const a=(t.action||'').toLowerCase();
+    const isBuy=a.indexOf('buy')>=0, isSell=a.indexOf('sell')>=0; if(!isBuy&&!isSell)continue;
+    const q=Number(t.shares)||0; if(!q)continue; const px=Number(t.price)||0;
+    const A=acc[t.ticker]||(acc[t.ticker]={sh:0,cost:0});
+    if(isBuy){ A.sh+=q; A.cost+=q*px; }
+    else { const avg=A.sh>0?A.cost/A.sh:px; A.sh-=q; A.cost-=q*avg; if(A.sh<1e-9){A.sh=0;A.cost=0;} }
+  }
+  for(const tk in acc){ const A=acc[tk]; if(!(A.sh>1e-6))continue; const h=_meMakeHolding(tk,A.sh,A.cost,(A.sh>0?A.cost/A.sh:0)); total+=h.costBasis; (h.type==='etf'?etfs:equities).push(h); }
+  return {equities,etfs,total};
 }
 function _saveMaxPortfolio(txR){
   try{ localStorage.setItem('me_portfolio_v1', JSON.stringify({ equities:RAW.endowment.equities, etfs:RAW.endowment.etfs, transactions:(txR&&txR.length)?TRANSACTIONS.slice():null, savedAt:new Date().toISOString() })); }
@@ -2782,19 +2823,28 @@ function handleExcelUpload(input){
   const file=input.files[0]; if(!file) return;
   const okEl=document.getElementById('uploadSuccess'), errEl=document.getElementById('uploadError');
   if(okEl){okEl.style.display='none';} if(errEl){errEl.style.display='none';}
+  const fail=function(msg){ if(errEl){ errEl.innerHTML=msg; errEl.style.display='block'; } if(okEl) okEl.style.display='none'; };
   const reader=new FileReader();
   reader.onload=function(e){
     try{
       const data=new Uint8Array(e.target.result); const wb=XLSX.read(data,{type:'array'});
-      const sheets=wb.SheetNames;
-      const pfName=sheets.find(s=>String(s).trim().toLowerCase()==='portfolio');
-      const txName=sheets.find(s=>String(s).trim().toLowerCase()==='transactions');
-      if(!pfName){ if(errEl){errEl.textContent='Could not find a "Portfolio" sheet. The workbook needs a Portfolio tab (Ticker, Shares, Cost Basis, Avg Stock Price Buy) plus a Transactions tab.'; errEl.style.display='block';} return; }
-      const parsed=parseMaxPortfolio(XLSX.utils.sheet_to_json(wb.Sheets[pfName],{header:1,defval:null}));
-      const txR=txName?parseMaxTransactions(XLSX.utils.sheet_to_json(wb.Sheets[txName],{header:1,defval:null})):null;
-      if(!parsed.equities.length && !parsed.etfs.length){ if(errEl){errEl.textContent='No holdings could be read from the Portfolio sheet — check the column headers.'; errEl.style.display='block';} return; }
-      RAW.endowment.equities=parsed.equities; RAW.endowment.etfs=parsed.etfs; RAW.endowment.cash=0; RAW.endowment.bond=null;
-      if(txR && txR.length){ TRANSACTIONS.length=0; txR.forEach(t=>TRANSACTIONS.push(t)); }
+      const sheets=wb.SheetNames; const low=sheets.map(s=>String(s).trim().toLowerCase());
+      const pickSheet=(preds)=>{ for(const p of preds){ const i=low.findIndex(p); if(i>=0) return sheets[i]; } return null; };
+      const holdSheet=pickSheet([n=>n==='portfolio', n=>n.indexOf('position')>=0, n=>n.indexOf('holding')>=0]);
+      const txSheet=pickSheet([n=>n==='transactions', n=>n.indexOf('all transaction')>=0, n=>(n.indexOf('transaction')>=0 && sheets[low.indexOf(n)]!==holdSheet)]);
+      if(!holdSheet && !txSheet){ return fail('Could not find a holdings or transactions tab. Your file needs a sheet like <strong>Portfolio</strong>, <strong>Positions</strong>, or <strong>Holdings</strong> (and ideally a <strong>Transactions</strong> sheet).<br>Sheets found: '+sheets.join(', ')); }
+      const txParsed = txSheet ? parseMaxTx(XLSX.utils.sheet_to_json(wb.Sheets[txSheet],{header:1,defval:null})) : {transactions:null, running:{}};
+      let holdings = holdSheet ? parseMaxHoldings(XLSX.utils.sheet_to_json(wb.Sheets[holdSheet],{header:1,defval:null})) : {equities:[],etfs:[],total:0};
+      let note='';
+      if(!holdings.equities.length && !holdings.etfs.length && txParsed.transactions && txParsed.transactions.length){
+        holdings = deriveHoldingsFromTx(txParsed.transactions, txParsed.running); note=' · positions derived from transactions';
+      }
+      const nH=holdings.equities.length+holdings.etfs.length;
+      // Guard: never wipe good data / never land on $0 — if nothing usable parsed, keep current data.
+      if(nH===0){ return fail('Read the file but found <strong>0 holdings</strong>, so your current data was <strong>NOT changed</strong>. The column headers are probably different than expected.<br>Sheets seen: '+sheets.join(', ')+'.<br>Tell Claude the exact header names in your holdings sheet and it\'ll map them.'); }
+      RAW.endowment.equities=holdings.equities; RAW.endowment.etfs=holdings.etfs; RAW.endowment.cash=0; RAW.endowment.bond=null;
+      const txR=(txParsed.transactions && txParsed.transactions.length)?txParsed.transactions:null;
+      if(txR){ TRANSACTIONS.length=0; txR.forEach(t=>TRANSACTIONS.push(t)); }
       _saveMaxPortfolio(txR);
       // reset derived caches so Performance + Transactions rebuild from the new data
       perfSeries=null; if(typeof _benchSeriesCache==='object'){ Object.keys(_benchSeriesCache).forEach(k=>delete _benchSeriesCache[k]); }
@@ -2802,9 +2852,9 @@ function handleExcelUpload(input){
       buildState(); renderAll();
       try{ fetchLivePrices(); }catch(_){}
       if(typeof currentTab!=='undefined'){ if(currentTab==='transactions') renderTransactions(); if(currentTab==='benchmark') renderPerformanceTab(); }
-      if(okEl){ okEl.innerHTML='✅ Loaded '+parsed.equities.length+' stocks + '+parsed.etfs.length+' ETFs'+(txR?(' · '+txR.length+' transactions'):' · (no Transactions sheet — kept existing)')+'<div style="font-size:10px;margin-top:4px">Cost basis '+fmtK(parsed.total)+' · saved to this browser</div>'; okEl.style.display='block'; }
+      if(okEl){ okEl.innerHTML='✅ Loaded '+holdings.equities.length+' stocks + '+holdings.etfs.length+' ETFs'+note+(txR?(' · '+txR.length+' transactions'):' · (no transactions sheet — kept existing)')+'<div style="font-size:10px;margin-top:4px">Cost basis '+fmtK(holdings.total)+' · saved to this browser</div>'; okEl.style.display='block'; }
       const lu=document.getElementById('lastUpdate'); if(lu)lu.textContent='Uploaded: '+file.name; input.value='';
-    }catch(err){ if(errEl){errEl.textContent='Error reading file: '+err.message; errEl.style.display='block';} console.error('Upload error:',err); }
+    }catch(err){ fail('Error reading file: '+err.message); console.error('Upload error:',err); }
   };
   reader.readAsArrayBuffer(file);
 }
