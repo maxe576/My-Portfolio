@@ -338,8 +338,29 @@ tr:hover td{background:rgba(212,167,44,.06)}
     <div class="snapshot-note" style="margin-top:10px"><strong>Full constituent lists</strong> load directly from Vanguard for its ETFs — no key needed. All other issuers (SPDR, Invesco, VanEck, Fidelity, iShares) show their <strong>25 largest holdings</strong>, which covers most of each fund's weight in these top-heavy ETFs. Bond ETFs have no equity constituents. Screening data — verify against fund provider disclosures.</div>
   </div>
 </div>
+<div id="tab-concentration" class="tab-panel">
+  <div class="kpi-grid" id="concKpis"></div>
+  <div class="grid-2">
+    <div class="card"><div class="card-title">Top Positions <span style="font-size:10px;font-weight:400;color:var(--muted)">share of total portfolio</span></div><div id="concPositions"></div></div>
+    <div class="card"><div class="card-title">Sector Concentration <span style="font-size:10px;font-weight:400;color:var(--muted)">weight by sector</span></div><div id="concSectors"></div></div>
+  </div>
+  <div class="card" style="margin-top:16px"><div class="card-title">Diversification Metrics <span style="font-size:10px;font-weight:400;color:var(--muted)">how concentrated the portfolio is</span></div><div id="concMetrics"></div></div>
+</div>
 <div id="tab-sectorcompare" class="tab-panel">
-  <div class="card" style="margin-bottom:16px"><div class="card-title">Sector Performance — Click a Sector to Analyze <span style="font-size:10px;font-weight:400;color:var(--muted)">your holdings vs the sector benchmark ETF, by period</span></div><div id="sectorCards"></div></div>
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title">Sector Performance by Period <span style="font-size:10px;font-weight:400;color:var(--muted)">weighted return of your holdings in each sector over the selected range</span></div>
+    <div class="period-row" id="spByPeriodRow">
+      <button class="period-btn" onclick="setSectorPeriod('1W',this)">1W</button>
+      <button class="period-btn active" onclick="setSectorPeriod('1M',this)">1M</button>
+      <button class="period-btn" onclick="setSectorPeriod('3M',this)">3M</button>
+      <button class="period-btn" onclick="setSectorPeriod('6M',this)">6M</button>
+      <button class="period-btn" onclick="setSectorPeriod('YTD',this)">YTD</button>
+      <button class="period-btn" onclick="setSectorPeriod('1Y',this)">1Y</button>
+      <span class="period-loading" id="spByPeriodLoading"></span>
+    </div>
+    <div id="sectorPeriodBars"></div>
+  </div>
+  <div class="card" style="margin-bottom:16px"><div class="card-title">Sector Detail — Click a Sector to Analyze <span style="font-size:10px;font-weight:400;color:var(--muted)">your holdings vs the sector benchmark ETF, by period</span></div><div id="sectorCards"></div></div>
   <div id="sectorCompareDetail" style="display:none">
     <div class="perf-grid" id="scKpis"></div>
     <div class="card" style="margin-bottom:16px">
@@ -1146,7 +1167,10 @@ function updateDataQuality() {
   if (missingSector > 0) issues.push(missingSector + ' missing sector');
   if (betaCov < 0.8) issues.push((betaCov * 100).toFixed(0) + '% beta coverage');
   let status = 'good', label = 'Data OK';
-  if (missingPrice > n * 0.1 || betaCov < 0.5) { status = 'stale'; label = 'Data Stale'; }
+  // "Stale" is reserved for genuinely missing live PRICES (the thing that actually goes stale).
+  // Missing beta is static reference data (unclassified tickers) — that's "Partial", not "Stale",
+  // and it never blocks anything (risk calcs just skip those names).
+  if (missingPrice > n * 0.1) { status = 'stale'; label = 'Data Stale'; }
   else if (issues.length) { status = 'partial'; label = 'Data Partial'; }
   pill.className = 'dq-pill dq-' + status;
   pill.textContent = '● ' + label;
@@ -1160,7 +1184,7 @@ const NAV_GROUPS = {
   portfolio:  { tabs: [['holdings','Holdings'], ['sectors','Sectors']] },
   performance:{ tabs: [['benchmark','Performance & Benchmarks'], ['sectorcompare','Sector Performance']] },
   transactions:{ tabs: [['transactions','Transactions']] },
-  risk:       { tabs: [['risk','Risk & Exposure']] },
+  risk:       { tabs: [['risk','Risk & Exposure'], ['concentration','Concentration']] },
   thesis:     { tabs: [['thesis','Investment Thesis']] },
   whatif:     { tabs: [['whatif','What-If']] },
   monitoring: { tabs: [['news','Market News'], ['calendar','Economic Calendar'], ['movers','Movers']] }
@@ -1177,6 +1201,7 @@ function runTabHook(tab) {
   else if (tab === 'aum') renderAUM();
   else if (tab === 'movers') { if (moversData[activeMoversView]) renderMovers(activeMoversView); else loadMovers(); }
   else if (tab === 'risk') { renderRiskExposure(); loadEtfLookThrough(); }
+  else if (tab === 'concentration') renderConcentration();
   else if (tab === 'transactions') renderTransactions();
   else if (tab === 'benchmark') renderPerformanceTab();
 }
@@ -1430,6 +1455,113 @@ function renderSectorCards() {
         <div style="font-size:10px;color:var(--muted);margin-top:2px">${(s.pct*100).toFixed(1)}% of eq. portfolio · β${s.beta.toFixed(2)}</div>
       </div>`;
     }).join('')}</div>`;
+  renderSectorPeriodBars();
+}
+
+// ── SECTOR PERFORMANCE BY PERIOD ──────────────────────────────────────────────
+let sectorPeriod='1M';
+function setSectorPeriod(p,btn){
+  sectorPeriod=p;
+  if(btn){ const row=btn.parentElement; if(row) row.querySelectorAll('.period-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); }
+  renderSectorPeriodBars();
+}
+async function renderSectorPeriodBars(){
+  const wrap=document.getElementById('sectorPeriodBars'); if(!wrap) return;
+  const load=document.getElementById('spByPeriodLoading'); if(load) load.textContent='Loading '+sectorPeriod+'…';
+  const EXCL=['Broad Market','Fixed Income'];
+  const hs=S.holdings.filter(h=>h.sector && !EXCL.includes(h.sector));
+  const bySec={}; hs.forEach(h=>{ (bySec[h.sector]=bySec[h.sector]||[]).push(h); });
+  const tickers=[...new Set(hs.map(h=>h.ticker))];
+  const rets={};
+  for(let i=0;i<tickers.length;i+=6){
+    await Promise.all(tickers.slice(i,i+6).map(async tk=>{ try{ rets[tk]=await fetchCandleReturn(tk,sectorPeriod); }catch(e){ rets[tk]=null; } }));
+  }
+  let spyRet=null; try{ spyRet=await fetchCandleReturn('SPY',sectorPeriod); }catch(e){}
+  const rows=Object.keys(bySec).map(sec=>{
+    let rsum=0,wsum=0,mv=0;
+    bySec[sec].forEach(h=>{ const r=rets[h.ticker]; const w=h.marketValue||0; mv+=w; if(r!=null&&!isNaN(r)){ rsum+=r*w; wsum+=w; } });
+    return {sec, ret:(wsum>0?rsum/wsum:null), mv, n:bySec[sec].length};
+  }).filter(r=>r.ret!=null).sort((a,b)=>b.ret-a.ret);
+  if(load) load.textContent='';
+  if(!rows.length){ wrap.innerHTML='<div style="color:var(--muted);font-size:12px;padding:12px 0">Couldn\'t load market returns right now — try Refresh Prices or reopen this tab.</div>'; return; }
+  const maxAbs=Math.max(...rows.map(r=>Math.abs(r.ret)),1);
+  const totMv=rows.reduce((s,r)=>s+r.mv,0)||1;
+  wrap.innerHTML=(spyRet!=null&&!isNaN(spyRet)?`<div style="font-size:11px;color:var(--muted);margin-bottom:10px">Benchmark — S&P 500 (SPY): <strong style="color:${spyRet>=0?'#4ade80':'#ff8f8f'}">${spyRet>=0?'+':''}${spyRet.toFixed(1)}%</strong> over ${sectorPeriod}</div>`:'')
+    + rows.map(r=>{
+      const pos=r.ret>=0; const w=(Math.abs(r.ret)/maxAbs*50).toFixed(1);
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+        <div style="width:150px;flex-shrink:0;font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.sec} · ${(r.mv/totMv*100).toFixed(1)}% of portfolio · ${r.n} holding${r.n>1?'s':''}">${r.sec}</div>
+        <div style="flex:1;position:relative;height:18px;background:var(--bg);border-radius:4px;overflow:hidden">
+          <div style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border)"></div>
+          <div style="position:absolute;top:2px;bottom:2px;${pos?'left:50%':('right:50%')};width:${w}%;background:${pos?'#4ade80':'#ff8f8f'};border-radius:3px"></div>
+        </div>
+        <div style="width:62px;flex-shrink:0;text-align:right;font-size:12px;font-weight:700;color:${pos?'#4ade80':'#ff8f8f'}">${pos?'+':''}${r.ret.toFixed(1)}%</div>
+      </div>`;
+    }).join('');
+}
+
+// ── CONCENTRATION (Risk sub-tab) ──────────────────────────────────────────────
+function renderConcentration(){
+  const hs=[...S.holdings].filter(h=>(h.marketValue||0)>0).sort((a,b)=>(b.marketValue||0)-(a.marketValue||0));
+  const total=hs.reduce((s,h)=>s+(h.marketValue||0),0)||1;
+  const wt=h=>(h.marketValue||0)/total;
+  const topN=n=>hs.slice(0,n).reduce((s,h)=>s+wt(h),0)*100;
+  const hhiPos=hs.reduce((s,h)=>s+Math.pow(wt(h),2),0);       // 0..1
+  const effHoldings=hhiPos>0?1/hhiPos:0;
+  // sectors
+  const secMap={}; hs.forEach(h=>{ secMap[h.sector||'Unclassified']=(secMap[h.sector||'Unclassified']||0)+(h.marketValue||0); });
+  const secRows=Object.keys(secMap).map(k=>({sec:k,mv:secMap[k],pct:secMap[k]/total*100})).sort((a,b)=>b.mv-a.mv);
+  const hhiSec=secRows.reduce((s,r)=>s+Math.pow(r.pct/100,2),0);
+  const effSectors=hhiSec>0?1/hhiSec:0;
+  const top=hs[0];
+  const top5=topN(5), top10=topN(10);
+  const assess = top5>60?{t:'Highly concentrated',c:'#ff8f8f'} : top5>40?{t:'Moderately concentrated',c:'#f0c75e'} : {t:'Well diversified',c:'#4ade80'};
+  const kg=document.getElementById('concKpis');
+  if(kg) kg.innerHTML=
+     _meKpi('Largest Position', top?top.ticker:'—', top?(wt(top)*100).toFixed(1)+'% of portfolio':'', true)
+    +_meKpi('Top 5 Weight', top5.toFixed(1)+'%', 'of total portfolio')
+    +_meKpi('Top 10 Weight', top10.toFixed(1)+'%', 'of total portfolio')
+    +_meKpi('Effective Holdings', effHoldings.toFixed(1), hs.length+' positions held')
+    +_meKpi('Diversification', assess.t, 'based on top-5 weight');
+  // top positions bars
+  const posEl=document.getElementById('concPositions');
+  if(posEl){
+    const shown=hs.slice(0,15); const maxW=shown.length?wt(shown[0])*100:1;
+    posEl.innerHTML=shown.map(h=>{ const p=wt(h)*100; return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <div class="ticker-cell" style="width:60px;flex-shrink:0;font-size:11px">${h.ticker}</div>
+      <div style="flex:1;height:16px;background:var(--bg);border-radius:4px;overflow:hidden"><div style="height:100%;width:${(p/maxW*100).toFixed(1)}%;background:#3b62c9;border-radius:4px"></div></div>
+      <div style="width:52px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:var(--navy)">${p.toFixed(1)}%</div>
+    </div>`; }).join('')+(hs.length>15?`<div style="font-size:10px;color:var(--muted);margin-top:6px">+${hs.length-15} more positions</div>`:'');
+  }
+  // sector bars
+  const secEl=document.getElementById('concSectors');
+  if(secEl){
+    const maxS=secRows.length?secRows[0].pct:1;
+    secEl.innerHTML=secRows.map(r=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <div style="width:150px;flex-shrink:0;font-size:11px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.sec}">${r.sec}</div>
+      <div style="flex:1;height:16px;background:var(--bg);border-radius:4px;overflow:hidden"><div style="height:100%;width:${(r.pct/maxS*100).toFixed(1)}%;background:#c9a84c;border-radius:4px"></div></div>
+      <div style="width:52px;flex-shrink:0;text-align:right;font-size:11px;font-weight:700;color:var(--navy)">${r.pct.toFixed(1)}%</div>
+    </div>`).join('');
+  }
+  // metrics table
+  const mEl=document.getElementById('concMetrics');
+  if(mEl){
+    const rows=[
+      ['Herfindahl Index (positions)', Math.round(hhiPos*10000).toLocaleString(), 'Higher = more concentrated. 10,000 = a single holding; below ~1,500 is diversified.'],
+      ['Effective # of holdings', effHoldings.toFixed(1), 'How many equal-sized positions your concentration is equivalent to (you hold '+hs.length+').'],
+      ['Herfindahl Index (sectors)', Math.round(hhiSec*10000).toLocaleString(), 'Concentration across sectors.'],
+      ['Effective # of sectors', effSectors.toFixed(1)+' of '+secRows.length, 'Equal-weight sector equivalent.'],
+      ['Largest sector', secRows.length?secRows[0].sec+' ('+secRows[0].pct.toFixed(1)+'%)':'—', 'Biggest sector exposure.'],
+      ['Overall', assess.t, 'Top 5 holdings = '+top5.toFixed(1)+'% of the portfolio.']
+    ];
+    mEl.innerHTML='<div style="display:grid;grid-template-columns:1fr auto;gap:0">'
+      + rows.map(([l,v,d])=>`<div style="padding:9px 0;border-bottom:1px solid var(--border)">
+          <div style="font-size:12px;font-weight:600">${l}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px;max-width:640px">${d}</div>
+        </div>
+        <div style="padding:9px 0 9px 16px;border-bottom:1px solid var(--border);text-align:right;font-size:15px;font-weight:700;color:${l==='Overall'?assess.c:'var(--navy)'};white-space:nowrap">${v}</div>`).join('')
+      + '</div>';
+  }
 }
 
 // ── BENCHMARK ─────────────────────────────────────────────────────────────────
