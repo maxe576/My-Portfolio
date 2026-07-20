@@ -366,23 +366,26 @@ tr:hover td{background:rgba(212,167,44,.06)}
     <div class="card" style="margin-bottom:16px">
       <div class="card-title" id="scChartTitle">Sector Performance vs Benchmark</div>
       <div class="period-row" id="scPeriodRow">
-        <button class="period-btn active" onclick="setSCPeriod('1D',this)">1D</button>
         <button class="period-btn" onclick="setSCPeriod('1W',this)">1W</button>
         <button class="period-btn" onclick="setSCPeriod('1M',this)">1M</button>
-        <button class="period-btn" onclick="setSCPeriod('3M',this)">3M</button>
+        <button class="period-btn active" onclick="setSCPeriod('3M',this)">3M</button>
         <button class="period-btn" onclick="setSCPeriod('6M',this)">6M</button>
         <button class="period-btn" onclick="setSCPeriod('YTD',this)">YTD</button>
         <button class="period-btn" onclick="setSCPeriod('1Y',this)">1Y</button>
-        <button class="period-btn" onclick="setSCPeriod('3Y',this)">3Y</button>
-        <button class="period-btn" onclick="setSCPeriod('5Y',this)">5Y</button>
+        <button class="period-btn" onclick="setSCPeriod('ALL',this)">ALL</button>
+        <span style="width:1px;height:22px;background:var(--border);margin:0 6px;display:inline-block"></span>
+        <input type="date" id="scCustomStart" title="Custom range start" style="padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--card-bg-alt);font-size:11px;color:var(--text)">
+        <span style="font-size:12px;color:var(--muted)">→</span>
+        <input type="date" id="scCustomEnd" title="Custom range end" style="padding:3px 6px;border:1px solid var(--border);border-radius:4px;background:var(--card-bg-alt);font-size:11px;color:var(--text)">
+        <button class="period-btn" onclick="applySCCustom(this)">Apply Range</button>
         <span class="period-loading" id="scPeriodLoading"></span>
       </div>
       <div class="chart-container"><canvas id="scChart"></canvas></div>
       <div class="chart-legend" id="scLegend"></div>
     </div>
     <div class="grid-2">
-      <div class="card"><div class="card-title">Equities in Sector</div><div class="tbl-wrap"><table id="scEqTable"></table></div></div>
-      <div class="card"><div class="card-title">ETFs in Sector</div><div class="tbl-wrap"><table id="scEtfTable"></table></div></div>
+      <div class="card"><div class="card-title">Your Holdings in This Sector <span style="font-size:10px;font-weight:400;color:var(--muted)">during the selected window</span></div><div class="tbl-wrap"><table id="scEqTable"></table></div></div>
+      <div class="card"><div class="card-title">How to Read This</div><div id="scEtfNote" style="font-size:12px;color:var(--muted);line-height:1.65"></div></div>
     </div>
   </div>
 </div>
@@ -779,7 +782,7 @@ const MASTER_CODE = 'CEEFUND2026';
 let activeFund = 'endowment';
 let activePerfFund = 'endowment';
 let activePerfPeriod = 'YTD';
-let activeSCPeriod = '1D';
+let activeSCPeriod = '3M';
 let activeSCSector = null;
 let currentSCView = 'top';
 let historicalCache = {};
@@ -1733,6 +1736,89 @@ function buildPerfSeries(){
   }
   perfSeries={dates:masterDates,value,contrib:contribArr,mv:mvArr};
   Object.keys(_benchSeriesCache).forEach(k=>delete _benchSeriesCache[k]);
+}
+
+// ── SECTOR TIME-WEIGHTED RETURN ENGINE ────────────────────────────────────────
+// Reconstructs the daily market value of your holdings in ONE sector from the
+// transaction ledger + real historical prices, and chains a daily time-weighted
+// return (indexed to 0% at the window start). Positions SOLD during the window
+// count up to the day you sold; positions sold before the window are absent.
+let scCustomStart = null, scCustomEnd = null;
+function _sectorOf(ticker){
+  const h=[...RAW.endowment.equities,...RAW.endowment.etfs].find(x=>x.ticker===ticker);
+  if(h && h.sector) return h.sector;
+  const e=ME_ENRICH[ticker];
+  return e ? e.s : 'Information Technology';
+}
+function _sectorTickers(sectorName){
+  return [...new Set(TRANSACTIONS.filter(t=>t.ticker && (t.action==='Buy'||t.action==='Sell'||t.action==='Journal')).map(t=>t.ticker))]
+    .filter(t=>_sectorOf(t)===sectorName);
+}
+function _windowRange(period){
+  const end=_todayKey();
+  if(period==='CUSTOM') return [scCustomStart||_perfStartDate(), scCustomEnd||end];
+  if(period==='ALL') return [_perfStartDate(), end];
+  if(period==='YTD'){ const y=new Date().getFullYear(); return [y+'-01-01', end]; }
+  const days={'1W':7,'1M':31,'3M':93,'6M':186,'1Y':372}[period]||31;
+  const c=new Date(); c.setDate(c.getDate()-days); return [c.toISOString().slice(0,10), end];
+}
+function _periodLabel(p){ return p==='CUSTOM' ? ((scCustomStart||'?')+' → '+(scCustomEnd||'today')) : (p==='ALL'?'Since inception':p); }
+// cumulative TWR (%) of the sector sleeve over [startKey,endKey]; [0]=0%
+function buildSectorTWR(sectorName, startKey, endKey){
+  const tks=_sectorTickers(sectorName).filter(t=>_histCache[t]);
+  if(!tks.length) return null;
+  const dset=new Set();
+  tks.forEach(t=>_histCache[t].dates.forEach(d=>{ if(d>=startKey && d<=endKey) dset.add(d); }));
+  const dates=[...dset].sort();
+  if(dates.length<2) return null;
+  const txAll=TRANSACTIONS.filter(t=>t.ticker && tks.indexOf(t.ticker)>=0 && (t.action==='Buy'||t.action==='Sell'||t.action==='Journal'))
+    .slice().sort((a,b)=>(a.date||'').localeCompare(b.date||''));
+  const ptr={},last={},shares={}; tks.forEach(t=>{ptr[t]=0;last[t]=null;shares[t]=0;});
+  let txi=0, idx=1, prevV=null;
+  const twr=[], mv=[];
+  for(let k=0;k<dates.length;k++){
+    const d=dates[k];
+    for(const t of tks){ const h=_histCache[t]; while(ptr[t]<h.dates.length && h.dates[ptr[t]]<=d){ last[t]=h.closes[ptr[t]]; ptr[t]++; } }
+    let flow=0;
+    while(txi<txAll.length && (txAll[txi].date||'')<=d){
+      const t=txAll[txi], sgn=(t.action==='Sell')?-1:1, sh=Number(t.shares)||0;
+      shares[t.ticker]=(shares[t.ticker]||0)+sgn*sh;
+      if((t.date||'')>=startKey && k>0){ const px=Number(t.price)||last[t.ticker]||0; flow+=sgn*sh*px; }
+      txi++;
+    }
+    let V=0; for(const t of tks){ const s=shares[t]; if(!s)continue; const p=last[t]; if(p!=null) V+=s*p; }
+    mv.push(V);
+    if(k===0){ twr.push(0); prevV=V; }
+    else { const denom=prevV+flow; let r=0; if(denom>1e-6) r=V/denom-1; idx*=(1+r); twr.push((idx-1)*100); prevV=V; }
+  }
+  return {dates, twr, mv};
+}
+// benchmark cumulative return (%) aligned to `dates`, indexed to 0% at window start (uses total-return adj close)
+function benchTWR(ticker, dates){
+  const h=_histCache[ticker]; if(!h) return null;
+  const px=(h.adj&&h.adj.length===h.dates.length)?h.adj:h.closes;
+  const aligned=[]; let i=0,lp=null;
+  for(const d of dates){ while(i<h.dates.length && h.dates[i]<=d){ lp=px[i]; i++; } aligned.push(lp); }
+  const base=aligned.find(p=>p!=null); if(base==null) return null;
+  return aligned.map(p=>p!=null?(p/base-1)*100:null);
+}
+// did we actually hold this ticker at any point in [startKey,endKey]? (shares at window
+// start > 0, OR bought during the window). Used to keep the per-stock table honest.
+function _heldDuring(ticker, startKey, endKey){
+  let shStart=0, boughtIn=false;
+  TRANSACTIONS.forEach(t=>{ if(t.ticker!==ticker) return; if(!(t.action==='Buy'||t.action==='Sell'||t.action==='Journal')) return;
+    const d=t.date||'', sgn=(t.action==='Sell')?-1:1, q=sgn*(Number(t.shares)||0);
+    if(d<startKey) shStart+=q;
+    else if(d<=endKey && t.action!=='Sell' && (Number(t.shares)||0)>0) boughtIn=true;
+  });
+  return shStart>1e-6 || boughtIn;
+}
+// individual ticker price return (%) over the window's dates (uses close), + whether still held
+function tickerWindowReturn(ticker, dates){
+  const line=benchTWR(ticker, dates);   // same alignment/indexing works for any ticker
+  const held=[...RAW.endowment.equities,...RAW.endowment.etfs].some(h=>h.ticker===ticker);
+  let ret=null; if(line){ for(let i=line.length-1;i>=0;i--){ if(line[i]!=null){ ret=line[i]; break; } } }
+  return {ticker, ret, held};
 }
 function _contribEvents(){ return TRANSACTIONS.filter(t=>(t.action==='Deposit'||t.action==='Withdrawal') && !isNaN(Number(t.amount)))
   .map(t=>({date:t.date,amount:Number(t.amount)})).sort((a,b)=>(a.date||'').localeCompare(b.date||'')); }
@@ -2732,7 +2818,72 @@ function setSCPeriod(period,btn){
   activeSCPeriod=period;
   document.querySelectorAll('#scPeriodRow .period-btn').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
-  if(activeSCSector)renderSCChart(activeSCSector,currentSCView,period);
+  if(activeSCSector)renderSCChart(activeSCSector,'top',period);
+}
+function applySCCustom(btn){
+  const s=document.getElementById('scCustomStart').value, e=document.getElementById('scCustomEnd').value;
+  if(!s||!e){ alert('Pick both a start and an end date.'); return; }
+  if(s>e){ alert('Start date must be on or before the end date.'); return; }
+  scCustomStart=s; scCustomEnd=e; activeSCPeriod='CUSTOM';
+  document.querySelectorAll('#scPeriodRow .period-btn').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  if(activeSCSector) renderSCChart(activeSCSector,'top','CUSTOM');
+  else alert('Click a sector below first, then apply the range.');
+}
+// NEW: transaction-based, time-weighted sector line chart vs benchmark ETF vs S&P 500
+async function renderSCChart(sectorName, view, period){
+  activeSCSector=sectorName;
+  if(period) activeSCPeriod=period;
+  const loadEl=document.getElementById('scPeriodLoading'); if(loadEl)loadEl.textContent='⏳ Loading price history…';
+  document.getElementById('sectorCompareDetail').style.display='block';
+  const benchmark=SECTOR_BENCHMARKS[sectorName]||'SPY';
+  const secTks=_sectorTickers(sectorName);
+  await _fetchMany([...secTks, benchmark, 'SPY']);
+  const [startKey,endKey]=_windowRange(activeSCPeriod);
+  const sleeve=buildSectorTWR(sectorName,startKey,endKey);
+  if(loadEl)loadEl.textContent='';
+  const titleEl=document.getElementById('scChartTitle');
+  const noteEl=document.getElementById('scEtfNote');
+  if(!sleeve || sleeve.dates.length<2){
+    titleEl.textContent=sectorName+' — '+_periodLabel(activeSCPeriod);
+    if(scChartRef){scChartRef.destroy();scChartRef=null;}
+    document.getElementById('scKpis').innerHTML='<div style="grid-column:1/-1;color:var(--muted);font-size:12px;padding:14px">No holdings in '+sectorName+' during this window — you either held none then, or sold out before it started. Try a longer range (e.g. ALL).</div>';
+    document.getElementById('scEqTable').innerHTML='';
+    if(noteEl)noteEl.innerHTML='';
+    const leg=document.getElementById('scLegend'); if(leg)leg.innerHTML='';
+    return;
+  }
+  const dates=sleeve.dates;
+  const benchLine=benchTWR(benchmark,dates);
+  const spyLine=benchTWR('SPY',dates);
+  const last=a=>{ if(!a)return null; for(let i=a.length-1;i>=0;i--) if(a[i]!=null) return a[i]; return null; };
+  const sR=last(sleeve.twr), bR=last(benchLine), spR=last(spyLine);
+  titleEl.textContent=sectorName+' — '+_periodLabel(activeSCPeriod)+' · time-weighted return';
+  if(scChartRef)scChartRef.destroy();
+  const ctx=document.getElementById('scChart').getContext('2d');
+  scChartRef=new Chart(ctx,{type:'line',data:{labels:dates,datasets:[
+    {label:'My '+sectorName+' sleeve', data:sleeve.twr, borderColor:'#C9A84C', backgroundColor:'rgba(201,168,76,.10)', borderWidth:2.6, pointRadius:0, fill:true, tension:.15},
+    {label:benchmark+' · sector ETF', data:benchLine, borderColor:'#3b62c9', borderWidth:1.8, pointRadius:0, fill:false, tension:.15, borderDash:[6,3]},
+    {label:'S&P 500 (SPY)', data:spyLine, borderColor:'#94a3b8', borderWidth:1.6, pointRadius:0, fill:false, tension:.15, borderDash:[2,3]}
+  ]},options:{responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{display:false},tooltip:{callbacks:{title:items=>items&&items.length?items[0].label:'',label:c=>c.dataset.label+': '+(c.parsed.y==null?'—':(c.parsed.y>=0?'+':'')+c.parsed.y.toFixed(2)+'%')}}},scales:{y:{ticks:{callback:v=>(v>=0?'+':'')+v+'%',font:{size:11}},grid:{color:'#1d3652'}},x:{ticks:{maxTicksLimit:8,font:{size:10},callback:function(v){const d=this.getLabelForValue(v);return d?d.slice(2):'';}},grid:{display:false}}}}});
+  const leg=document.getElementById('scLegend');
+  if(leg)leg.innerHTML='<div class="legend-item"><div class="legend-dot" style="background:#C9A84C"></div>My '+sectorName+'</div><div class="legend-item"><div class="legend-dot" style="background:#3b62c9"></div>'+benchmark+' (sector ETF)</div><div class="legend-item"><div class="legend-dot" style="background:#94a3b8"></div>S&P 500</div>';
+  const fr=v=>v==null?'<span style="color:var(--muted)">—</span>':'<span class="'+(v>=0?'pos':'neg')+'">'+(v>=0?'+':'')+v.toFixed(2)+'%</span>';
+  let sec=null; try{ sec=calcSectors(S.holdings.filter(h=>!['Broad Market','Fixed Income'].includes(h.sector)), S.holdings.reduce((s,h)=>s+(h.marketValue||0),0)||1).find(s=>s.name===sectorName); }catch(e){}
+  const wt=sec?(sec.pct*100).toFixed(1)+'%':'—';
+  document.getElementById('scKpis').innerHTML=
+     '<div class="perf-card" style="border-left:3px solid var(--gold)"><div class="perf-label">My '+sectorName+' ('+_periodLabel(activeSCPeriod)+')</div><div class="perf-value">'+fr(sR)+'</div><div class="perf-sub">time-weighted · incl. sold positions</div></div>'
+    +'<div class="perf-card"><div class="perf-label">'+benchmark+' — sector ETF</div><div class="perf-value">'+fr(bR)+'</div><div class="perf-sub">same window</div></div>'
+    +'<div class="perf-card"><div class="perf-label">S&P 500 (SPY)</div><div class="perf-value">'+fr(spR)+'</div><div class="perf-sub">same window</div></div>'
+    +'<div class="perf-card"><div class="perf-label">vs '+benchmark+'</div><div class="perf-value">'+((sR!=null&&bR!=null)?fr(sR-bR):'—')+'</div><div class="perf-sub">your picks − sector ETF</div></div>'
+    +'<div class="perf-card"><div class="perf-label">vs S&P 500</div><div class="perf-value">'+((sR!=null&&spR!=null)?fr(sR-spR):'—')+'</div><div class="perf-sub">your picks − market</div></div>'
+    +'<div class="perf-card"><div class="perf-label">Current Weight</div><div class="perf-value">'+wt+'</div><div class="perf-sub">of portfolio now</div></div>';
+  const rows=secTks.filter(tk=>_heldDuring(tk,startKey,endKey)).map(tk=>tickerWindowReturn(tk,dates)).filter(r=>r.ret!=null).sort((a,b)=>b.ret-a.ret);
+  const mkRow=r=>{ const en=ME_ENRICH[r.ticker]; const c=(en&&en.c)||r.ticker;
+    return '<tr><td class="ticker-cell">'+r.ticker+'</td><td>'+c+'</td><td class="'+(r.ret>=0?'pos':'neg')+'">'+(r.ret>=0?'+':'')+r.ret.toFixed(2)+'%</td><td>'+(r.held?'<span style="color:var(--muted)">held</span>':'<span style="color:#f0c75e;font-weight:600">sold</span>')+'</td></tr>'; };
+  const thdr='<tr><th>Ticker</th><th>Name</th><th>Return</th><th>Status</th></tr>';
+  document.getElementById('scEqTable').innerHTML=rows.length?thdr+rows.map(mkRow).join(''):'<tr><td style="color:var(--muted)">No holdings in this window.</td></tr>';
+  if(noteEl)noteEl.innerHTML='<strong style="color:var(--text)">Time-weighted return</strong> measures how your picks performed, neutral to the size/timing of your buys & sells — so it\'s an apples-to-apples comparison with '+benchmark+' and the S&P 500.<br><br>The window <strong style="color:var(--text)">'+_periodLabel(activeSCPeriod)+'</strong> includes every stock you held in '+sectorName+' during it, <em>including ones you\'ve since sold</em> (marked "sold") — their gain/loss counts for the time you held them. Stocks sold <em>before</em> the window are excluded. Per-stock figures at left are each name\'s own price move over the window.';
 }
 
 // buildPerfChartPeriod removed (dead: no callers; targeted deleted #perfChart/#perfKpis DOM
@@ -2847,7 +2998,34 @@ const ME_ENRICH = {
   UNH:{c:'UnitedHealth Group',s:'Health Care',t:'equity',b:0.60},
   VOO:{c:'Vanguard S&P 500 ETF',s:'Broad Market',t:'etf',b:1.00},
   VRT:{c:'Vertiv Holdings',s:'Industrials',t:'equity',b:1.50},
-  VST:{c:'Vistra Corp.',s:'Utilities',t:'equity',b:1.30}
+  VST:{c:'Vistra Corp.',s:'Utilities',t:'equity',b:1.30},
+  // sold-out / historical positions — classified so transaction-based sector analysis attributes them correctly
+  AAL:{c:'American Airlines',s:'Industrials',t:'equity',b:1.40},
+  ADBE:{c:'Adobe Inc.',s:'Information Technology',t:'equity',b:1.30},
+  AIQ:{c:'Global X Artificial Intelligence ETF',s:'Information Technology',t:'etf',b:1.20},
+  AMPL:{c:'Amplitude Inc.',s:'Information Technology',t:'equity',b:1.40},
+  ANET:{c:'Arista Networks',s:'Information Technology',t:'equity',b:1.10},
+  BLK:{c:'BlackRock Inc.',s:'Financials',t:'equity',b:1.30},
+  BRO:{c:'Brown & Brown',s:'Financials',t:'equity',b:0.80},
+  DAL:{c:'Delta Air Lines',s:'Industrials',t:'equity',b:1.30},
+  DDI:{c:'DoubleDown Interactive',s:'Communication Services',t:'equity',b:0.60},
+  EXE:{c:'Expand Energy',s:'Energy',t:'equity',b:0.90},
+  FI:{c:'Fiserv Inc.',s:'Financials',t:'equity',b:1.00},
+  FISV:{c:'Fiserv Inc. (old ticker)',s:'Financials',t:'equity',b:1.00},
+  FVRR:{c:'Fiverr International',s:'Communication Services',t:'equity',b:1.80},
+  HUT:{c:'Hut 8 Corp.',s:'Information Technology',t:'equity',b:4.00},
+  MA:{c:'Mastercard Inc.',s:'Financials',t:'equity',b:1.10},
+  MBGL:{c:'MBGL',s:'Consumer Discretionary',t:'equity',b:1.20},
+  NOK:{c:'Nokia Corp.',s:'Information Technology',t:'equity',b:0.90},
+  NTNX:{c:'Nutanix Inc.',s:'Information Technology',t:'equity',b:1.20},
+  PDFS:{c:'PDF Solutions',s:'Information Technology',t:'equity',b:1.20},
+  PROP:{c:'Prairie Operating',s:'Energy',t:'equity',b:1.50},
+  QCOM:{c:'Qualcomm Inc.',s:'Information Technology',t:'equity',b:1.30},
+  QQQ:{c:'Invesco QQQ Trust',s:'Broad Market',t:'etf',b:1.10},
+  TSLA:{c:'Tesla Inc.',s:'Consumer Discretionary',t:'equity',b:2.00},
+  TTD:{c:'The Trade Desk',s:'Information Technology',t:'equity',b:1.70},
+  UPST:{c:'Upstart Holdings',s:'Financials',t:'equity',b:2.50},
+  XOM:{c:'Exxon Mobil',s:'Energy',t:'equity',b:0.90}
 };
 function _meEnrich(tk){ const e=ME_ENRICH[tk]; if(e) return {company:e.c,sector:e.s,type:e.t,beta:e.b};
   return {company:tk, sector:'Information Technology', type:(ME_ETF_SET.has(tk)?'etf':'equity'), beta:null}; }
@@ -3062,7 +3240,7 @@ async function showSectorComparePeriod(sectorName,cardEl){
   await renderSCChart(sectorName,'top',activeSCPeriod);
 }
 
-async function renderSCChart(sectorName, view, period) {
+async function renderSCChart_OLD_bars(sectorName, view, period) {
   activeSCSector = sectorName;
   currentSCView = view;
   const loadEl = document.getElementById('scPeriodLoading');
