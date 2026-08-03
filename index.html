@@ -345,7 +345,7 @@ tr:hover td{background:rgba(212,167,44,.06)}
       <select id="ltEtfSel" onchange="renderLtEtfDetail(this.value)" style="background:var(--card-bg-alt);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:5px 10px;font-size:12px"></select>
     </div>
     <div class="tbl-wrap"><table id="ltEtfTable"></table></div>
-    <div class="snapshot-note" style="margin-top:10px"><strong>Full constituent lists</strong> load directly from Vanguard for its ETFs — no key needed. All other issuers (SPDR, Invesco, VanEck, Fidelity, iShares) show their <strong>25 largest holdings</strong>, which covers most of each fund's weight in these top-heavy ETFs. Bond ETFs have no equity constituents. Screening data — verify against fund provider disclosures.</div>
+    <div class="snapshot-note" style="margin-top:10px"><strong>Vanguard ETFs</strong> load their full constituent list live. Other ETFs show a <strong>curated set of top holdings with approximate weights</strong> (embedded reference — the free issuer/aggregator feeds are no longer publicly available). Bond ETFs have no equity constituents. Screening data — verify against fund provider disclosures.</div>
   </div>
 </div>
 <div id="tab-concentration" class="tab-panel">
@@ -1057,12 +1057,12 @@ function renderRiskExposure() {
 // ── ETF LOOK-THROUGH (Yahoo topHoldings: each ETF's top-10 constituents + weights) ──────
 let etfHoldings = {};        // etfTicker -> {holdings:[{symbol,name,pct}], src:'fmp'|'sa'} | null | undefined
 let _ltLoading = false;
-(function(){ try{ const c=JSON.parse(localStorage.getItem('cee_etf_hold_v4')||'null');
+(function(){ try{ const c=JSON.parse(localStorage.getItem('cee_etf_hold_v5')||'null');
   if(c && Date.now()-c.ts < 30*86400e3) etfHoldings=c.data||{}; }catch(e){} })();
 
 function reloadEtfLookThrough(){
   etfHoldings={};
-  try{ localStorage.removeItem('cee_etf_hold_v4'); }catch(e){}
+  try{ localStorage.removeItem('cee_etf_hold_v5'); }catch(e){}
   loadEtfLookThrough();
 }
 
@@ -1088,9 +1088,38 @@ async function _vanguardHoldings(tk){
 }
 const _VANGUARD_RX=/^V[A-Z]{1,4}$/;                       // VOO, VTI, VGT, VUG, VHT, VFH, …
 
+// Embedded top holdings for ETFs whose issuers no longer expose a free, CORS-safe holdings
+// feed (Yahoo topHoldings is auth-gated; stockanalysis + Finnhub etf/holdings are 404/paywalled
+// as of 2026-07). Weights are APPROXIMATE reference data — verify against issuer disclosures.
+const ETF_HOLDINGS_EMBEDDED = {
+  QQQM:{asOf:'approx. mid-2026',holdings:[
+    {symbol:'NVDA',name:'NVIDIA',pct:0.095},{symbol:'AAPL',name:'Apple',pct:0.085},{symbol:'MSFT',name:'Microsoft',pct:0.078},
+    {symbol:'AMZN',name:'Amazon',pct:0.055},{symbol:'AVGO',name:'Broadcom',pct:0.050},{symbol:'META',name:'Meta Platforms',pct:0.045},
+    {symbol:'NFLX',name:'Netflix',pct:0.030},{symbol:'TSLA',name:'Tesla',pct:0.028},{symbol:'COST',name:'Costco',pct:0.025},
+    {symbol:'GOOGL',name:'Alphabet A',pct:0.025},{symbol:'GOOG',name:'Alphabet C',pct:0.024},{symbol:'PLTR',name:'Palantir',pct:0.020},
+    {symbol:'CSCO',name:'Cisco',pct:0.018},{symbol:'AMD',name:'Adv. Micro Devices',pct:0.016},{symbol:'TMUS',name:'T-Mobile US',pct:0.015}]},
+  SMH:{asOf:'approx. mid-2026',holdings:[
+    {symbol:'NVDA',name:'NVIDIA',pct:0.20},{symbol:'TSM',name:'Taiwan Semiconductor',pct:0.11},{symbol:'AVGO',name:'Broadcom',pct:0.09},
+    {symbol:'AMD',name:'Adv. Micro Devices',pct:0.05},{symbol:'ASML',name:'ASML Holding',pct:0.045},{symbol:'QCOM',name:'Qualcomm',pct:0.045},
+    {symbol:'TXN',name:'Texas Instruments',pct:0.045},{symbol:'AMAT',name:'Applied Materials',pct:0.045},{symbol:'MU',name:'Micron',pct:0.040},
+    {symbol:'LRCX',name:'Lam Research',pct:0.040},{symbol:'KLAC',name:'KLA Corp',pct:0.035},{symbol:'ADI',name:'Analog Devices',pct:0.030},
+    {symbol:'INTC',name:'Intel',pct:0.030},{symbol:'MRVL',name:'Marvell',pct:0.025},{symbol:'NXPI',name:'NXP Semiconductors',pct:0.020}]},
+  QTUM:{asOf:'approx. mid-2026 · ~equal weight',holdings:[
+    {symbol:'IONQ',name:'IonQ',pct:0.020},{symbol:'RGTI',name:'Rigetti Computing',pct:0.018},{symbol:'QBTS',name:'D-Wave Quantum',pct:0.018},
+    {symbol:'NVDA',name:'NVIDIA',pct:0.017},{symbol:'AMD',name:'Adv. Micro Devices',pct:0.016},{symbol:'MRVL',name:'Marvell',pct:0.016},
+    {symbol:'AVGO',name:'Broadcom',pct:0.015},{symbol:'MU',name:'Micron',pct:0.015},{symbol:'IBM',name:'IBM',pct:0.015},
+    {symbol:'INTC',name:'Intel',pct:0.014},{symbol:'HPE',name:'HP Enterprise',pct:0.014},{symbol:'ARM',name:'Arm Holdings',pct:0.013}]},
+  EUV:{asOf:'approx. mid-2026',holdings:[
+    {symbol:'ASML',name:'ASML Holding',pct:0.09},{symbol:'AMAT',name:'Applied Materials',pct:0.08},{symbol:'LRCX',name:'Lam Research',pct:0.07},
+    {symbol:'KLAC',name:'KLA Corp',pct:0.06},{symbol:'TER',name:'Teradyne',pct:0.05},{symbol:'COHR',name:'Coherent',pct:0.05},
+    {symbol:'LITE',name:'Lumentum',pct:0.045},{symbol:'ONTO',name:'Onto Innovation',pct:0.04},{symbol:'MKSI',name:'MKS Instruments',pct:0.04},
+    {symbol:'ENTG',name:'Entegris',pct:0.04},{symbol:'NVMI',name:'Nova Ltd',pct:0.035},{symbol:'IPGP',name:'IPG Photonics',pct:0.03}]}
+};
 async function fetchEtfHoldings(ticker){
   if(etfHoldings[ticker]!==undefined) return etfHoldings[ticker];
   const tk=String(ticker).toUpperCase();
+  // Embedded top holdings first (reliable, no external dependency) for funds we've curated.
+  if(ETF_HOLDINGS_EMBEDDED[tk]) return (etfHoldings[tk]={holdings:ETF_HOLDINGS_EMBEDDED[tk].holdings,src:'embedded',asOf:ETF_HOLDINGS_EMBEDDED[tk].asOf});
   // Bond ETFs have no equity constituents to look through — go straight to the FI panel.
   const etfObj=[...RAW.endowment.etfs,...RAW.ceeFund.etfs].find(e=>e.ticker===tk);
   if(etfObj&&etfObj.sector==='Fixed Income') return (etfHoldings[tk]=null);
@@ -1117,7 +1146,7 @@ async function loadEtfLookThrough(){
       await Promise.all(todo.slice(i,i+4).map(t=>fetchEtfHoldings(t)));
       if(i+4<todo.length) await new Promise(r=>setTimeout(r,300));
     }
-    try{ localStorage.setItem('cee_etf_hold_v4',JSON.stringify({ts:Date.now(),data:etfHoldings})); }catch(e){}
+    try{ localStorage.setItem('cee_etf_hold_v5',JSON.stringify({ts:Date.now(),data:etfHoldings})); }catch(e){}
     renderLookThrough();
   } finally { _ltLoading=false; }
 }
@@ -4117,7 +4146,7 @@ function renderThesisMasterTable(filter, sort) {
   <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('period')" title="Price return over the selected window — does NOT affect Since Purchase">${thesisPeriod} ↕</th>
   <th style="cursor:pointer;user-select:none" title="Annualized 36-month regression alpha vs SPY" onclick="thesisSortBy('alpha')">α ↕</th>
   <th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('weight')" title="Weight in your portfolio">Wt ↕</th>
-  <th style="text-align:right">Shares</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('mv')" title="Market value">Mkt Val ↕</th><th style="text-align:right" title="Base price target">Target</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('upside')">Upside ↕</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('return')" title="Gain since you purchased — NOT year-to-date">Since Buy ↕</th><th>Thesis</th>
+  <th style="text-align:right">Shares</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('mv')" title="Market value">Mkt Val ↕</th><th style="text-align:right" title="Base price target">Target</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('upside')">Upside ↕</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('return')" title="Gain since you purchased — NOT year-to-date">Since Buy ↕</th>
 </tr>
     ${holdings.map(h => {
       const td = thesisData[h.ticker] || {};
@@ -4145,7 +4174,6 @@ function renderThesisMasterTable(filter, sort) {
         <td style="text-align:right;font-weight:600">${td.base?'$'+td.base.toFixed(2):'—'}</td>
         <td class="${upside===null?'':upside>=0?'pos':'neg'}" style="font-weight:700;text-align:right">${upside!==null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—'}</td>
         <td class="${(h.glPct||0)>=0?'pos':'neg'}" style="text-align:right">${h.glPct!=null?((h.glPct>=0?'+':'')+(h.glPct*100).toFixed(1)+'%'):'—'}</td>
-        <td style="font-size:11px;color:${hasThesis?'#4ade80':'var(--muted)'}">${hasThesis?'✅ Written':'✏️ Empty'}</td>
       </tr>`;
     }).join('')}`;
 }
