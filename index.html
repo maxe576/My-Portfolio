@@ -1685,7 +1685,34 @@ function _txActionBadge(a){
 function setTxFilter(f,btn){ txFilter=f; document.querySelectorAll('#txFilterRow .filter-btn').forEach(b=>b.classList.remove('active')); if(btn)btn.classList.add('active'); renderTxTable(); }
 function txSearchInput(v){ txSearch=(v||'').trim().toUpperCase(); renderTxTable(); }
 function txYearInput(v){ txYear=v; renderTxTable(); }
-function renderTransactions(){ _txPopulateYears(); renderTxKpis(); renderTxTable(); }
+function renderTransactions(){ _txPopulateYears(); renderTxKpis(); renderTxTable(); loadTxPrices(); }
+// current price per ticker for the ledger's "Price Now / vs Now" columns (incl. sold names)
+const _txPriceCache = {};
+let _txPricesLoading = false;
+function _txCurPrice(tk){
+  if(!tk) return null;
+  if(typeof livePrices!=='undefined' && livePrices[tk]>0) return livePrices[tk];
+  if(_txPriceCache[tk]>0) return _txPriceCache[tk];
+  const h=(typeof ALL_HOLDINGS==='function')?ALL_HOLDINGS().find(x=>x.ticker===tk):null;
+  return (h&&h.price>0)?h.price:null;
+}
+async function loadTxPrices(){
+  if(_txPricesLoading) return; _txPricesLoading=true;
+  try{
+    const tks=[...new Set(TRANSACTIONS.filter(t=>t.ticker).map(t=>t.ticker))];
+    const todo=tks.filter(tk=>_txPriceCache[tk]===undefined && !(typeof livePrices!=='undefined'&&livePrices[tk]>0));
+    for(let i=0;i<todo.length;i+=6){
+      await Promise.all(todo.slice(i,i+6).map(async tk=>{
+        try{ const d=await fetchYF('https://query1.finance.yahoo.com/v8/finance/chart/'+tk.replace('.','-')+'?interval=1d&range=1d',7000);
+          const meta=d&&d.chart&&d.chart.result&&d.chart.result[0]&&d.chart.result[0].meta;
+          const p=meta&&(meta.regularMarketPrice||meta.chartPreviousClose||meta.previousClose);
+          _txPriceCache[tk]=(p>0)?p:null;
+        }catch(e){ _txPriceCache[tk]=null; }
+      }));
+      if(typeof currentTab!=='undefined' && currentTab==='transactions') renderTxTable();
+    }
+  } finally { _txPricesLoading=false; if(typeof currentTab!=='undefined' && currentTab==='transactions') renderTxTable(); }
+}
 function _txPopulateYears(){
   const sel=document.getElementById('txYear'); if(!sel||sel.dataset.filled)return;
   const yrs=[...new Set(TRANSACTIONS.map(t=>(t.date||'').slice(0,4)).filter(Boolean))].sort().reverse();
@@ -1722,9 +1749,18 @@ function renderTxTable(){
     const amtCell=isNaN(amt)?'—':('<span class="'+(amt>=0?'pos':'neg')+'">'+(amt>=0?'+$':'-$')+fmt(amt)+'</span>');
     const sh=(r.shares!=null)?(+r.shares).toLocaleString('en-US',{maximumFractionDigits:4}):'—';
     const px=(r.price!=null)?'$'+(+r.price).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'—';
-    return '<tr><td>'+_txFmtDate(r.date)+'</td><td>'+_txActionBadge(r.action)+'</td><td class="ticker-cell">'+(r.ticker||'—')+'</td><td style="text-align:right">'+sh+'</td><td style="text-align:right">'+px+'</td><td style="text-align:right">'+amtCell+'</td></tr>';
+    const cur=_txCurPrice(r.ticker);
+    const pxNow=(cur!=null)?'$'+cur.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):(r.ticker?'<span style="color:var(--muted)">…</span>':'—');
+    let vsCell='<span style="color:var(--muted)">—</span>';
+    if(cur!=null && r.price>0 && (r.action==='Buy'||r.action==='Sell')){
+      const chg=(cur-r.price)/r.price*100;
+      const good = r.action==='Buy' ? chg>=0 : chg<=0;   // Buy smart if it rose; Sell smart if it fell
+      const tip = r.action==='Sell' ? (chg<=0?'Good sell — down '+Math.abs(chg).toFixed(1)+'% since.':'It rose '+chg.toFixed(1)+'% after you sold.') : (chg>=0?'Up '+chg.toFixed(1)+'% since you bought.':'Down '+Math.abs(chg).toFixed(1)+'% since you bought.');
+      vsCell='<span class="'+(good?'pos':'neg')+'" title="'+tip+'">'+(chg>=0?'+':'')+chg.toFixed(1)+'%</span>';
+    }
+    return '<tr><td>'+_txFmtDate(r.date)+'</td><td>'+_txActionBadge(r.action)+'</td><td class="ticker-cell">'+(r.ticker||'—')+'</td><td style="text-align:right">'+sh+'</td><td style="text-align:right">'+px+'</td><td style="text-align:right">'+pxNow+'</td><td style="text-align:right">'+vsCell+'</td><td style="text-align:right">'+amtCell+'</td></tr>';
   }).join('');
-  tbl.innerHTML='<thead><tr><th>Date</th><th>Action</th><th>Ticker</th><th style="text-align:right">Shares</th><th style="text-align:right">Price</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+body+'</tbody>';
+  tbl.innerHTML='<thead><tr><th>Date</th><th>Action</th><th>Ticker</th><th style="text-align:right">Shares</th><th style="text-align:right" title="Your price at the time of the trade">Trade Price</th><th style="text-align:right" title="Current market price">Price Now</th><th style="text-align:right" title="Move vs your trade price. Green = smart trade: bought before a rise, or sold before a drop.">vs Now</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+body+'</tbody>';
   const cnt=document.getElementById('txCount'); if(cnt)cnt.textContent='Showing '+rows.length+' of '+TRANSACTIONS.length+' transactions';
 }
 
@@ -3477,7 +3513,10 @@ async function fetchMcap(ticker) {
         if (currentThesisTicker===ticker) document.getElementById('detailMcap').textContent = getMcapTier(mcapCache[ticker])+' ($'+formatMcap(mcapCache[ticker])+')';
         if (document.getElementById('mcapBreakdown')) renderMcapBreakdown();
       }
-      const pe = d.metric['peNormalizedAnnual'] || d.metric['peBasicExclExtraTTM'] || d.metric['peTTM'];
+      // Prefer trailing-twelve-month P/E (current earnings) over the ANNUAL/normalized figure,
+      // which lags a full fiscal year and reads absurdly high for cyclicals (e.g. MU showed 109x
+      // on stale annual EPS vs ~18x TTM). Order: TTM → basic TTM → excl-extra TTM → annual fallback.
+      const pe = d.metric['peTTM'] || d.metric['peBasicExclExtraTTM'] || d.metric['peExclExtraTTM'] || d.metric['peNormalizedAnnual'];
       if (pe && !isNaN(pe) && pe > 0 && pe < 1000) {
         peCache[ticker] = parseFloat(pe.toFixed(1));
         if (currentThesisTicker===ticker) {
@@ -3545,7 +3584,7 @@ const peCache = {};
 const ytdCache = {};
 // Restore P/E + mcap from localStorage (24h TTL) so revisits cost zero Finnhub calls
 try{
-  const _pc=JSON.parse(localStorage.getItem('cee_pe_cache')||'null');
+  const _pc=JSON.parse(localStorage.getItem('cee_pe_cache_v2')||'null');
   if(_pc&&Date.now()-_pc.ts<86400000){Object.assign(peCache,_pc.pe||{});Object.assign(typeof mcapCache!=='undefined'?mcapCache:{}, _pc.mcap||{});}
 }catch(e){}
 const IR_PAGES={AAPL:'https://investor.apple.com',ABBV:'https://investors.abbvie.com',ADI:'https://investor.analog.com',AMZN:'https://ir.aboutamazon.com','BRK.B':'https://www.berkshirehathaway.com',BX:'https://ir.blackstone.com',CAT:'https://investors.caterpillar.com',CEG:'https://investors.constellationenergy.com',COF:'https://investor.capitalone.com',COST:'https://investor.costco.com',CRWD:'https://ir.crowdstrike.com',DAR:'https://ir.darlingii.com',DIS:'https://thewaltdisneycompany.com/investor-relations/',DLR:'https://investor.digitalrealty.com',ET:'https://ir.energytransfer.com',FSLR:'https://investor.firstsolar.com',GD:'https://investorrelations.gd.com',GOOG:'https://abc.xyz/investor/',GOOGL:'https://abc.xyz/investor/',GRMN:'https://www.garmin.com/en-US/company/investors/',HCA:'https://investor.hcahealthcare.com',HD:'https://ir.homedepot.com',HOOD:'https://investors.robinhood.com',HWM:'https://ir.howmet.com',IREN:'https://investors.iren.com',ISRG:'https://isrg.intuitive.com',KO:'https://investors.coca-colacompany.com',LLY:'https://investor.lilly.com',MA:'https://investor.mastercard.com',META:'https://investor.atmeta.com',MSFT:'https://www.microsoft.com/en-us/investor',NFLX:'https://ir.netflix.net',NUE:'https://www.nucor.com/investors',NVDA:'https://investor.nvidia.com',ORCL:'https://investor.oracle.com',PANW:'https://investors.paloaltonetworks.com',PFE:'https://investors.pfizer.com',PLTR:'https://investors.palantir.com',SBGSF:'https://www.se.com/ww/en/about-us/investor-relations/',SOFI:'https://investors.sofi.com',SOUN:'https://investors.soundhound.com',SPGI:'https://investor.spglobal.com',SYK:'https://investors.stryker.com',TKO:'https://investor.tkogrp.com',TMUS:'https://investor.t-mobile.com',TSM:'https://investor.tsmc.com',TTWO:'https://ir.take2games.com',V:'https://investor.visa.com',VMC:'https://ir.vulcanmaterials.com',WM:'https://investors.wm.com',WMT:'https://stock.walmart.com',XOM:'https://investor.exxonmobil.com'};
@@ -3556,7 +3595,7 @@ function goToThesis(tk){
   if(btn)showTab('thesis',btn);
   setTimeout(()=>{try{openThesisDetail(tk);const p=document.getElementById('thesisDetailPanel');if(p&&p.scrollIntoView)p.scrollIntoView({behavior:'smooth',block:'start'});}catch(e){}},700);
 }
-function _savePeCache(){try{localStorage.setItem('cee_pe_cache',JSON.stringify({ts:Date.now(),pe:peCache,mcap:mcapCache}));}catch(e){}}
+function _savePeCache(){try{localStorage.setItem('cee_pe_cache_v2',JSON.stringify({ts:Date.now(),pe:peCache,mcap:mcapCache}));}catch(e){}}
 let thesisQuery='';
 function thesisSearchInput(v){thesisQuery=(v||'').trim().toLowerCase();renderThesisMasterTable(thesisFilter);}
 function thesisSearchGo(){
