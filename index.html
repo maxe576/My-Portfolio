@@ -47,6 +47,12 @@ th{background:var(--navy);color:white;padding:8px 10px;text-align:left;font-weig
 td{padding:7px 10px;border-bottom:1px solid var(--border);white-space:nowrap}
 tr:hover td{background:#0d223b}
 tr:last-child td{border-bottom:none}
+/* compact the wide Investment Thesis table so all columns fit without horizontal scroll */
+#thesisMasterTable{font-size:10.5px}
+#thesisMasterTable th{padding:6px 5px;font-size:9.5px}
+#thesisMasterTable td{padding:5px 5px}
+#thesisMasterTable .ticker-cell{font-size:10.5px}
+#thesisMasterTable img{height:13px;width:13px}
 .pos{color:var(--green);font-weight:600}.neg{color:var(--red);font-weight:600}
 .ticker-cell{font-weight:700;color:var(--blue)}
 .badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700}
@@ -4125,21 +4131,20 @@ function renderThesisMasterTable(filter, sort) {
       const _pTxt = _pV != null ? (_pV >= 0 ? '+' : '') + _pV.toFixed(1) + '%' : '—';
       const _shTxt = h.shares!=null ? (+h.shares).toFixed(4).replace(/\.?0+$/,'') : '—';
       return `<tr onclick="openThesisDetail('${h.ticker}')" style="cursor:pointer" onmouseover="this.style.background='#0d223b'" onmouseout="this.style.background=''">
-        <td class="ticker-cell" style="white-space:nowrap">${logoImg(h.ticker)}${h.ticker}</td>
-        <td>${h.company}</td>
+        <td class="ticker-cell" style="white-space:nowrap" title="${h.company||''}">${logoImg(h.ticker)}${h.ticker}</td>
         <td style="font-size:11px">${h.sector||'—'}</td>
-        <td><span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:${tierColor}22;color:${tierColor}">${tier}</span></td>
-        <td>${td.tag?'<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:'+TAG_BG[td.tag]+';color:'+TAG_COLORS[td.tag]+'">'+td.tag+'</span>':'—'}</td>
+        <td><span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px;background:${tierColor}22;color:${tierColor}">${tier}</span></td>
+        <td>${td.tag?'<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px;background:'+TAG_BG[td.tag]+';color:'+TAG_COLORS[td.tag]+'">'+td.tag+'</span>':'—'}</td>
         <td style="font-weight:600;color:${Number.isFinite(h.beta)?(h.beta>1.2?'#ff8f8f':h.beta<0.8?'#4ade80':'var(--navy)'):'var(--muted)'}">${Number.isFinite(h.beta)?h.beta.toFixed(2):'—'}</td>
-        <td style="font-size:12px">${peCache[h.ticker]?peCache[h.ticker]+'x':'—'}</td>
+        <td>${peCache[h.ticker]?peCache[h.ticker]+'x':'—'}</td>
         <td class="${_pCls}" title="Return over ${thesisPeriod} — separate from Since Purchase">${_pTxt}</td>
         <td class="${stats3y[h.ticker]?.alpha!=null?(stats3y[h.ticker].alpha>=0?'pos':'neg'):''}" style="font-weight:700" title="Annualized 36-month regression alpha vs SPY">${stats3y[h.ticker]?.alpha!=null?((stats3y[h.ticker].alpha>=0?'+':'')+stats3y[h.ticker].alpha.toFixed(1)+'%'):'—'}</td>
-        <td style="font-size:11px">${(h.marketValue/S.total*100).toFixed(1)}%</td>
+        <td style="text-align:right">${(h.marketValue/S.total*100).toFixed(1)}%</td>
         <td style="text-align:right">${_shTxt}</td>
         <td style="text-align:right;font-weight:600">$${fmt(h.marketValue||0)}</td>
-        <td style="font-weight:600">${td.base?'$'+td.base.toFixed(2):'—'}</td>
-        <td class="${upside===null?'':upside>=0?'pos':'neg'}" style="font-weight:700">${upside!==null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—'}</td>
-        <td class="${(h.glPct||0)>=0?'pos':'neg'}">${h.glPct!=null?((h.glPct>=0?'+':'')+(h.glPct*100).toFixed(1)+'%'):'—'}</td>
+        <td style="text-align:right;font-weight:600">${td.base?'$'+td.base.toFixed(2):'—'}</td>
+        <td class="${upside===null?'':upside>=0?'pos':'neg'}" style="font-weight:700;text-align:right">${upside!==null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—'}</td>
+        <td class="${(h.glPct||0)>=0?'pos':'neg'}" style="text-align:right">${h.glPct!=null?((h.glPct>=0?'+':'')+(h.glPct*100).toFixed(1)+'%'):'—'}</td>
         <td style="font-size:11px;color:${hasThesis?'#4ade80':'var(--muted)'}">${hasThesis?'✅ Written':'✏️ Empty'}</td>
       </tr>`;
     }).join('')}`;
