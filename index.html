@@ -4105,13 +4105,13 @@ function renderThesisMasterTable(filter, sort) {
   document.getElementById('thesisCount').textContent = `(${holdings.length} equities)`;
   document.getElementById('thesisMasterTable').innerHTML = `
     <tr>
-  <th>Ticker</th><th>Company</th><th>Sector</th><th>Market Cap</th><th>Tag</th>
-  <th style="cursor:pointer;user-select:none" title="36-month regression beta vs SPY (monthly returns)" onclick="thesisSortBy('beta')">3Y Beta ↕</th>
+  <th>Ticker</th><th>Sector</th><th title="Market cap tier">Cap</th><th>Tag</th>
+  <th style="cursor:pointer;user-select:none" title="36-month regression beta vs SPY" onclick="thesisSortBy('beta')">β ↕</th>
   <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('pe')">P/E ↕</th>
   <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('period')" title="Price return over the selected window — does NOT affect Since Purchase">${thesisPeriod} ↕</th>
-  <th style="cursor:pointer;user-select:none" title="Annualized intercept of the 36-month regression vs SPY" onclick="thesisSortBy('alpha')">3Y Alpha ↕</th>
-  <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('weight')" title="Weight within this portfolio">% of ${S.fundName} ↕</th>
-  <th style="text-align:right">Shares</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('mv')">Market Value ↕</th><th>Base Target</th><th style="cursor:pointer;user-select:none" onclick="thesisSortBy('upside')">Upside ↕</th><th style="cursor:pointer;user-select:none" onclick="thesisSortBy('return')" title="Gain since you purchased this position — NOT year-to-date">Since Purch. ↕</th><th>Thesis</th>
+  <th style="cursor:pointer;user-select:none" title="Annualized 36-month regression alpha vs SPY" onclick="thesisSortBy('alpha')">α ↕</th>
+  <th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('weight')" title="Weight in your portfolio">Wt ↕</th>
+  <th style="text-align:right">Shares</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('mv')" title="Market value">Mkt Val ↕</th><th style="text-align:right" title="Base price target">Target</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('upside')">Upside ↕</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('return')" title="Gain since you purchased — NOT year-to-date">Since Buy ↕</th><th>Thesis</th>
 </tr>
     ${holdings.map(h => {
       const td = thesisData[h.ticker] || {};
