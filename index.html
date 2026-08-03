@@ -323,6 +323,10 @@ tr:hover td{background:rgba(212,167,44,.06)}
     <div class="card"><div class="card-title">Fixed-Income Exposure <span style="font-size:10px;font-weight:400;color:var(--muted)">equity beta does not apply to these holdings</span></div><div class="tbl-wrap"><table id="fiTable"></table></div></div>
   </div>
   <div class="card" style="margin-bottom:16px">
+    <div class="card-title">Your ETF Positions <span style="font-size:10px;font-weight:400;color:var(--muted)">every ETF you currently hold</span></div>
+    <div class="tbl-wrap"><table id="myEtfTable"></table></div>
+  </div>
+  <div class="card" style="margin-bottom:16px">
     <div class="card-title">ETF Look-Through — Combined Equity Exposure
       <div style="display:flex;gap:8px;align-items:center">
         <span id="ltStatus" style="font-size:10px;font-weight:400;color:var(--muted)"></span>
@@ -659,7 +663,18 @@ tr:hover td{background:rgba(212,167,44,.06)}
 
   <!-- Master Equity Table -->
   <div class="card">
-    <div class="card-title">All Equities <span id="thesisCount" style="font-size:11px;font-weight:400;color:var(--muted)"></span></div>
+    <div class="card-title">All Equities <span id="thesisCount" style="font-size:11px;font-weight:400;color:var(--muted)"></span>
+      <div class="period-row" id="thesisPeriodRow" style="margin:0">
+        <span style="font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;margin-right:2px">Return window:</span>
+        <button class="period-btn" onclick="setThesisPeriod('1W',this)">1W</button>
+        <button class="period-btn" onclick="setThesisPeriod('1M',this)">1M</button>
+        <button class="period-btn" onclick="setThesisPeriod('3M',this)">3M</button>
+        <button class="period-btn" onclick="setThesisPeriod('6M',this)">6M</button>
+        <button class="period-btn active" onclick="setThesisPeriod('YTD',this)">YTD</button>
+        <button class="period-btn" onclick="setThesisPeriod('1Y',this)">1Y</button>
+        <span class="period-loading" id="thesisPeriodLoading"></span>
+      </div>
+    </div>
     <div class="tbl-wrap"><table id="thesisMasterTable"></table></div>
   </div>
 </div>
@@ -1007,6 +1022,7 @@ function renderRiskExposure() {
     kpi('Top 10 Concentration', (conc.topTen*100).toFixed(1)+'%','of active fund')+
     kpi('Fixed Income', (S.total>0?(fiVal/S.total*100).toFixed(1):'0.0')+'%', fmtK(fiVal))+
     kpi('Cash', (S.total>0?(S.cash/S.total*100).toFixed(1):'0.0')+'%', fmtK(S.cash||0));
+  renderMyEtfs();
   const cEl=document.getElementById('riskConcentration');
   if(cEl){
     const top=conc.sorted.slice(0,8);
@@ -1100,7 +1116,21 @@ async function loadEtfLookThrough(){
   } finally { _ltLoading=false; }
 }
 
+function renderMyEtfs(){
+  const el=document.getElementById('myEtfTable'); if(!el) return;
+  const etfs=[...S.etfs].sort((a,b)=>(b.marketValue||0)-(a.marketValue||0));
+  if(!etfs.length){ el.innerHTML='<tr><td style="color:var(--muted)">You do not hold any ETFs.</td></tr>'; return; }
+  el.innerHTML='<tr><th>ETF</th><th>Name</th><th style="text-align:right">Shares</th><th style="text-align:right">Market Value</th><th style="text-align:right">% of Portfolio</th><th style="text-align:right">Since Purch.</th><th>Look-through</th></tr>'
+   + etfs.map(e=>{
+      const w=(e.marketValue||0)/(S.total||1)*100;
+      const gl=e.glPct!=null?e.glPct*100:null;
+      const sh=(+e.shares).toFixed(4).replace(/\.?0+$/,'');
+      const lt=(etfHoldings[e.ticker]&&etfHoldings[e.ticker].holdings&&etfHoldings[e.ticker].holdings.length)?'<span style="color:#4ade80">available below</span>':'<span style="color:var(--muted)">not available</span>';
+      return '<tr><td class="ticker-cell">'+e.ticker+'</td><td>'+(e.company||'')+'</td><td style="text-align:right">'+sh+'</td><td style="text-align:right;font-weight:600">$'+fmt(e.marketValue||0)+'</td><td style="text-align:right">'+w.toFixed(1)+'%</td><td style="text-align:right" class="'+(gl>=0?'pos':'neg')+'">'+(gl!=null?((gl>=0?'+':'')+gl.toFixed(1)+'%'):'—')+'</td><td style="font-size:11px">'+lt+'</td></tr>';
+   }).join('');
+}
 function renderLookThrough(){
+  renderMyEtfs();
   const aggEl=document.getElementById('ltAgg'); if(!aggEl) return;
   const okEtfs=S.etfs.filter(e=>etfHoldings[e.ticker]&&etfHoldings[e.ticker].holdings&&etfHoldings[e.ticker].holdings.length);
   const st=document.getElementById('ltStatus');
@@ -3496,6 +3526,28 @@ let thesisSortAsc = false;
 let currentThesisTicker = null;
 let currentThesisSector = null;
 let thesisFilter = 'all';
+let thesisPeriod = 'YTD';               // return window shown in the thesis table (does not affect Since Purchase)
+const thesisPeriodCache = {};           // period -> {ticker: pct}
+function _thesisRet(tk){ if(thesisPeriod==='YTD') return ytdCache[tk]; const c=thesisPeriodCache[thesisPeriod]; return c?c[tk]:undefined; }
+function setThesisPeriod(p,btn){
+  thesisPeriod=p;
+  document.querySelectorAll('#thesisPeriodRow .period-btn').forEach(b=>b.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  renderThesisMasterTable(thesisFilter);
+  loadThesisPeriod(p);
+}
+async function loadThesisPeriod(p){
+  if(p==='YTD') return;   // YTD is already loaded into ytdCache by fetchYTDForThesis
+  const cache=thesisPeriodCache[p]||(thesisPeriodCache[p]={});
+  const eqs=RAW.endowment.equities.filter(h=>!['Broad Market','Fixed Income'].includes(h.sector));
+  const load=document.getElementById('thesisPeriodLoading'); if(load)load.textContent='Loading '+p+'…';
+  for(let i=0;i<eqs.length;i+=8){
+    await Promise.all(eqs.slice(i,i+8).map(async h=>{ if(cache[h.ticker]===undefined){ const v=await fetchCandleReturn(h.ticker,p); if(v!==null) cache[h.ticker]=v; } }));
+    if(i+8<eqs.length) await new Promise(r=>setTimeout(r,250));
+  }
+  if(load)load.textContent='';
+  renderThesisMasterTable(thesisFilter);
+}
 let sectorPieRef = null;
 let thesisAutoSaveTimer = null;
 
@@ -4037,7 +4089,8 @@ function renderThesisMasterTable(filter, sort) {
   const _dir = thesisSortAsc ? 1 : -1;
   if (thesisSortCol === 'beta') holdings = [...holdings].sort((a,b) => _dir*((a.beta||0)-(b.beta||0)));
   else if (thesisSortCol === 'pe') holdings = [...holdings].sort((a,b) => _dir*((peCache[a.ticker]||0)-(peCache[b.ticker]||0)));
-  else if (thesisSortCol === 'ytd') holdings = [...holdings].sort((a,b) => _dir*((ytdCache[a.ticker]||0)-(ytdCache[b.ticker]||0)));
+  else if (thesisSortCol === 'period') holdings = [...holdings].sort((a,b) => _dir*(((_thesisRet(a.ticker))||0)-((_thesisRet(b.ticker))||0)));
+  else if (thesisSortCol === 'mv') holdings = [...holdings].sort((a,b) => _dir*((a.marketValue||0)-(b.marketValue||0)));
   else if (thesisSortCol === 'alpha') holdings = [...holdings].sort((a,b) => _dir*(((stats3y[a.ticker]?.alpha)||0)-((stats3y[b.ticker]?.alpha)||0)));
   else if (thesisSortCol === 'upside') holdings = [...holdings].sort((a,b) => { const au=thesisData[a.ticker]?.base&&a.price?(thesisData[a.ticker].base-a.price)/a.price:-999; const bu=thesisData[b.ticker]?.base&&b.price?(thesisData[b.ticker].base-b.price)/b.price:-999; return _dir*(au-bu); });
   else if (thesisSortCol === 'return') holdings = [...holdings].sort((a,b) => _dir*((a.glPct||0)-(b.glPct||0)));
@@ -4055,10 +4108,10 @@ function renderThesisMasterTable(filter, sort) {
   <th>Ticker</th><th>Company</th><th>Sector</th><th>Market Cap</th><th>Tag</th>
   <th style="cursor:pointer;user-select:none" title="36-month regression beta vs SPY (monthly returns)" onclick="thesisSortBy('beta')">3Y Beta ↕</th>
   <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('pe')">P/E ↕</th>
-  <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('ytd')">YTD ↕</th>
+  <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('period')" title="Price return over the selected window — does NOT affect Since Purchase">${thesisPeriod} ↕</th>
   <th style="cursor:pointer;user-select:none" title="Annualized intercept of the 36-month regression vs SPY" onclick="thesisSortBy('alpha')">3Y Alpha ↕</th>
-  <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('weight')" title="Weight within this fund (Endowment or CEE), not the combined total">% of ${S.fundName} ↕</th>
-  <th>Price</th><th>Base Target</th><th style="cursor:pointer;user-select:none" onclick="thesisSortBy('upside')">Upside ↕</th><th style="cursor:pointer;user-select:none" onclick="thesisSortBy('return')" title="Gain since the fund purchased this position — NOT year-to-date">Since Purch. ↕</th><th>Thesis</th>
+  <th style="cursor:pointer;user-select:none" onclick="thesisSortBy('weight')" title="Weight within this portfolio">% of ${S.fundName} ↕</th>
+  <th style="text-align:right">Shares</th><th style="cursor:pointer;user-select:none;text-align:right" onclick="thesisSortBy('mv')">Market Value ↕</th><th>Base Target</th><th style="cursor:pointer;user-select:none" onclick="thesisSortBy('upside')">Upside ↕</th><th style="cursor:pointer;user-select:none" onclick="thesisSortBy('return')" title="Gain since you purchased this position — NOT year-to-date">Since Purch. ↕</th><th>Thesis</th>
 </tr>
     ${holdings.map(h => {
       const td = thesisData[h.ticker] || {};
@@ -4067,11 +4120,10 @@ function renderThesisMasterTable(filter, sort) {
       const tierColor = {'Mega Cap':'#7c3aed','Large Cap':'#9fc4ff','Mid Cap':'#047857','Small Cap':'#b45309'}[tier]||'var(--gray)';
       const upside = td.base && h.price ? (td.base - h.price)/h.price*100 : null;
       const hasThesis = td.thesis || td.catalysts || td.risks;
-      const _ytdV = ytdCache[h.ticker];
-      const _ytdCls = _ytdV != null ? (_ytdV >= 0 ? 'pos' : 'neg') : '';
-      const _ytdTxt = _ytdV != null ? (_ytdV >= 0 ? '+' : '') + _ytdV.toFixed(1) + '%' : '—';
-      const _ym = (window.ytdMeta||{})[h.ticker];
-      const _ytdTip = _ym ? 'YTD math: $'+_ym.base+' (close '+_ym.baseDt+') → $'+_ym.last+' = '+_ym.pct+'%. Prices are split-adjusted.' : 'YTD vs prior-year close';
+      const _pV = _thesisRet(h.ticker);
+      const _pCls = _pV != null ? (_pV >= 0 ? 'pos' : 'neg') : '';
+      const _pTxt = _pV != null ? (_pV >= 0 ? '+' : '') + _pV.toFixed(1) + '%' : '—';
+      const _shTxt = h.shares!=null ? (+h.shares).toFixed(4).replace(/\.?0+$/,'') : '—';
       return `<tr onclick="openThesisDetail('${h.ticker}')" style="cursor:pointer" onmouseover="this.style.background='#0d223b'" onmouseout="this.style.background=''">
         <td class="ticker-cell" style="white-space:nowrap">${logoImg(h.ticker)}${h.ticker}</td>
         <td>${h.company}</td>
@@ -4080,10 +4132,11 @@ function renderThesisMasterTable(filter, sort) {
         <td>${td.tag?'<span style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;background:'+TAG_BG[td.tag]+';color:'+TAG_COLORS[td.tag]+'">'+td.tag+'</span>':'—'}</td>
         <td style="font-weight:600;color:${Number.isFinite(h.beta)?(h.beta>1.2?'#ff8f8f':h.beta<0.8?'#4ade80':'var(--navy)'):'var(--muted)'}">${Number.isFinite(h.beta)?h.beta.toFixed(2):'—'}</td>
         <td style="font-size:12px">${peCache[h.ticker]?peCache[h.ticker]+'x':'—'}</td>
-        <td class="${_ytdCls}" title="${_ytdTip}" style="cursor:help">${_ytdTxt}</td>
+        <td class="${_pCls}" title="Return over ${thesisPeriod} — separate from Since Purchase">${_pTxt}</td>
         <td class="${stats3y[h.ticker]?.alpha!=null?(stats3y[h.ticker].alpha>=0?'pos':'neg'):''}" style="font-weight:700" title="Annualized 36-month regression alpha vs SPY">${stats3y[h.ticker]?.alpha!=null?((stats3y[h.ticker].alpha>=0?'+':'')+stats3y[h.ticker].alpha.toFixed(1)+'%'):'—'}</td>
         <td style="font-size:11px">${(h.marketValue/S.total*100).toFixed(1)}%</td>
-        <td>${h.price?'$'+h.price.toFixed(2):'—'}</td>
+        <td style="text-align:right">${_shTxt}</td>
+        <td style="text-align:right;font-weight:600">$${fmt(h.marketValue||0)}</td>
         <td style="font-weight:600">${td.base?'$'+td.base.toFixed(2):'—'}</td>
         <td class="${upside===null?'':upside>=0?'pos':'neg'}" style="font-weight:700">${upside!==null?(upside>=0?'+':'')+upside.toFixed(1)+'%':'—'}</td>
         <td class="${(h.glPct||0)>=0?'pos':'neg'}">${h.glPct!=null?((h.glPct>=0?'+':'')+(h.glPct*100).toFixed(1)+'%'):'—'}</td>
