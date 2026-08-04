@@ -410,8 +410,9 @@ tr:hover td{background:rgba(212,167,44,.06)}
       <button class="period-btn" onclick="setPerfPeriod('1M',this)">1M</button>
       <button class="period-btn" onclick="setPerfPeriod('3M',this)">3M</button>
       <button class="period-btn" onclick="setPerfPeriod('6M',this)">6M</button>
+      <button class="period-btn active" onclick="setPerfPeriod('YTD',this)">YTD</button>
       <button class="period-btn" onclick="setPerfPeriod('1Y',this)">1Y</button>
-      <button class="period-btn active" onclick="setPerfPeriod('ALL',this)">ALL</button>
+      <button class="period-btn" onclick="setPerfPeriod('ALL',this)">ALL</button>
       <span id="perfStatus" class="period-loading"></span>
     </div>
     <div class="filter-row" id="perfBenchRow" style="align-items:center">
@@ -1771,7 +1772,7 @@ function renderTxTable(){
 //   • Net Contributions = cumulative deposits − withdrawals (the money you put in)
 // The gap between them is genuine investment gain/loss (not cash you added).
 // Benchmarks simulate investing the SAME contribution schedule into an ETF.
-let perfPeriod = 'ALL';
+let perfPeriod = 'YTD';
 let perfBenchmarks = ['SPY'];
 let perfSeries = null;              // {dates, value[], contrib[], mv[]}
 const _benchSeriesCache = {};       // ticker -> value[] aligned to perfSeries.dates
@@ -1941,10 +1942,36 @@ function _perfSliceRange(){
   if(!perfSeries) return [0,0];
   const dates=perfSeries.dates, n=dates.length;
   if(perfPeriod==='ALL') return [0,n];
-  const days={'1M':31,'3M':93,'6M':186,'1Y':372}[perfPeriod]||99999;
-  const cut=new Date(); cut.setDate(cut.getDate()-days); const cutKey=cut.toISOString().slice(0,10);
+  let cutKey;
+  if(perfPeriod==='YTD'){ cutKey=(new Date().getFullYear())+'-01-01'; }
+  else { const days={'1M':31,'3M':93,'6M':186,'1Y':372}[perfPeriod]||99999;
+    const cut=new Date(); cut.setDate(cut.getDate()-days); cutKey=cut.toISOString().slice(0,10); }
   let i=dates.findIndex(d=>d>=cutKey); if(i<0)i=n-1; if(i<0)i=0;
   return [i,n];
+}
+// Portfolio TIME-WEIGHTED return over the sliced window [a,b] — flow-neutral (removes the effect
+// of deposits/withdrawals), so it's directly comparable to a benchmark's return over the same window.
+function _portfolioTWR(a,b){
+  if(!perfSeries) return null;
+  const val=perfSeries.value, con=perfSeries.contrib;
+  if(b-a<2) return null;
+  let idx=1, any=false;
+  for(let k=a+1;k<b;k++){
+    const flow=(con[k]||0)-(con[k-1]||0);         // external deposit/withdrawal that day
+    const denom=(val[k-1]||0)+flow;
+    if(denom>1e-6){ idx*=(val[k]/denom); any=true; }
+  }
+  return any?(idx-1)*100:null;
+}
+// Benchmark total return (%) over the window [a,b], from its total-return (adjusted) close.
+function _benchReturnWindow(tk,a,b){
+  const h=_histCache[tk]; if(!h||!perfSeries) return null;
+  const px=(h.adj&&h.adj.length===h.dates.length)?h.adj:h.closes;
+  const dates=perfSeries.dates;
+  const priceAt=(dk)=>{ let lp=null; for(let i=0;i<h.dates.length;i++){ if(h.dates[i]<=dk) lp=px[i]; else break; } return lp; };
+  const p0=priceAt(dates[a]), p1=priceAt(dates[b-1]);
+  if(p0==null||p1==null||p0<=0) return null;
+  return (p1/p0-1)*100;
 }
 async function renderPerformanceTab(){
   const host=document.getElementById('perfChart'); if(!host) return;
@@ -1991,19 +2018,24 @@ function drawPerfChart(){
 function renderPerfKpis(){
   const el=document.getElementById('perfKpis'); if(!el||!perfSeries) return;
   const n=perfSeries.value.length; if(!n)return;
+  const [a,b]=_perfSliceRange();
   const val=perfSeries.value[n-1], contrib=perfSeries.contrib[n-1];
-  const gain=val-contrib, gainPct=contrib?gain/contrib*100:0;
-  let alphaCard='';
+  const plabel = perfPeriod==='ALL'?'Since Inception':perfPeriod;
+  const twr=_portfolioTWR(a,b);                 // portfolio time-weighted return over the window
+  const pct=(v)=> v==null?'—':((v>=0?'+':'')+v.toFixed(1)+'%');
   const b0=perfBenchmarks[0];
-  if(b0){ const bs=computeBenchValueSeries(b0); if(bs&&bs[n-1]!=null){ const bGain=bs[n-1]-contrib, bPct=contrib?bGain/contrib*100:0; const alpha=gainPct-bPct;
-    alphaCard=_meKpi('vs '+b0, (alpha>=0?'+':'')+alpha.toFixed(1)+'%', 'your return − '+b0+' ('+bPct.toFixed(1)+'%)', true); } }
+  let benchCards='';
+  if(b0){ const br=_benchReturnWindow(b0,a,b);
+    benchCards = _meKpi(b0+' '+(perfPeriod==='ALL'?'':perfPeriod), pct(br), 'benchmark total return')
+      + ((twr!=null&&br!=null)? _meKpi('vs '+b0, pct(twr-br), 'you '+pct(twr)+' vs '+b0+' '+pct(br), true) : '');
+  }
   el.innerHTML=
-    _meKpi('Portfolio Value', '$'+fmt(val), 'reconstructed account value', true)+
+    _meKpi('Portfolio Value', '$'+fmt(val), 'incl. cash & dividends', true)+
     _meKpi('Net Invested', '$'+fmt(contrib), 'deposits − withdrawals')+
-    _meKpi('Investment Gain', (gain>=0?'+$':'-$')+fmt(gain), (gainPct>=0?'+':'')+gainPct.toFixed(1)+'% on money in')+
-    alphaCard;
+    _meKpi(plabel+' Return', pct(twr), 'your time-weighted return', true)+
+    benchCards;
 }
-function setPerfPeriod(p,btn){ perfPeriod=p; document.querySelectorAll('#perfPeriodRow .period-btn').forEach(b=>b.classList.remove('active')); if(btn)btn.classList.add('active'); drawPerfChart(); }
+function setPerfPeriod(p,btn){ perfPeriod=p; document.querySelectorAll('#perfPeriodRow .period-btn').forEach(b=>b.classList.remove('active')); if(btn)btn.classList.add('active'); drawPerfChart(); renderPerfKpis(); }
 async function togglePerfBench(tk,btn){
   tk=tk.toUpperCase();
   const i=perfBenchmarks.indexOf(tk);
