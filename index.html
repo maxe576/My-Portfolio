@@ -399,20 +399,44 @@ tr:hover td{background:rgba(212,167,44,.06)}
     </div>
   </div>
 </div>
-<!-- BENCHMARK -->
-<div id="tab-benchmark" class="tab-panel">
+<!-- MY PERFORMANCE -->
+<div id="tab-perfme" class="tab-panel">
   <div class="card" style="margin-bottom:16px">
-    <div class="card-title">Portfolio Performance
-      <span style="font-size:11px;font-weight:400;color:var(--muted)">total account value vs. the money you've put in — the gap is real investment gain, not cash you added</span>
+    <div class="card-title">My Portfolio Performance
+      <span style="font-size:11px;font-weight:400;color:var(--muted)">total account value vs. the money you put in — the gap is real investment gain, not cash you added</span>
     </div>
-    <div class="kpi-grid" id="perfKpis" style="margin-bottom:14px"></div>
-    <div class="period-row" id="perfPeriodRow">
+    <div class="kpi-grid" id="perfMeKpis" style="margin-bottom:14px"></div>
+    <div class="period-row" id="perfMePeriodRow">
+      <button class="period-btn" onclick="setPerfPeriod('1W',this)">1W</button>
       <button class="period-btn" onclick="setPerfPeriod('1M',this)">1M</button>
       <button class="period-btn" onclick="setPerfPeriod('3M',this)">3M</button>
       <button class="period-btn" onclick="setPerfPeriod('6M',this)">6M</button>
       <button class="period-btn active" onclick="setPerfPeriod('YTD',this)">YTD</button>
       <button class="period-btn" onclick="setPerfPeriod('1Y',this)">1Y</button>
-      <button class="period-btn" onclick="setPerfPeriod('ALL',this)">ALL</button>
+      <button class="period-btn" onclick="setPerfPeriod('3Y',this)">3Y</button>
+      <button class="period-btn" onclick="setPerfPeriod('5Y',this)">5Y</button>
+      <span id="perfMeStatus" class="period-loading"></span>
+    </div>
+    <div class="chart-container" style="height:360px"><canvas id="perfMeChart"></canvas></div>
+    <div id="perfMeNote" style="font-size:10px;color:var(--muted);margin-top:6px"></div>
+  </div>
+</div>
+<!-- VS ETFs -->
+<div id="tab-benchmark" class="tab-panel">
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-title">My Portfolio vs ETFs
+      <span style="font-size:11px;font-weight:400;color:var(--muted)">time-weighted % return of your holdings vs. each ETF over the selected window — "did my picks beat the index?"</span>
+    </div>
+    <div class="kpi-grid" id="perfKpis" style="margin-bottom:14px"></div>
+    <div class="period-row" id="perfPeriodRow">
+      <button class="period-btn" onclick="setPerfPeriod('1W',this)">1W</button>
+      <button class="period-btn" onclick="setPerfPeriod('1M',this)">1M</button>
+      <button class="period-btn" onclick="setPerfPeriod('3M',this)">3M</button>
+      <button class="period-btn" onclick="setPerfPeriod('6M',this)">6M</button>
+      <button class="period-btn active" onclick="setPerfPeriod('YTD',this)">YTD</button>
+      <button class="period-btn" onclick="setPerfPeriod('1Y',this)">1Y</button>
+      <button class="period-btn" onclick="setPerfPeriod('3Y',this)">3Y</button>
+      <button class="period-btn" onclick="setPerfPeriod('5Y',this)">5Y</button>
       <span id="perfStatus" class="period-loading"></span>
     </div>
     <div class="filter-row" id="perfBenchRow" style="align-items:center">
@@ -1251,7 +1275,7 @@ let currentTab = 'overview';
 const NAV_GROUPS = {
   overview:   { tabs: [['overview','Overview']] },
   portfolio:  { tabs: [['holdings','Holdings'], ['sectors','Sectors']] },
-  performance:{ tabs: [['benchmark','Performance & Benchmarks'], ['sectorcompare','Sector Performance']] },
+  performance:{ tabs: [['perfme','My Performance'], ['benchmark','vs ETFs'], ['sectorcompare','My Sectors']] },
   transactions:{ tabs: [['transactions','Transactions']] },
   risk:       { tabs: [['risk','Risk & Exposure'], ['concentration','Concentration']] },
   thesis:     { tabs: [['thesis','Investment Thesis']] },
@@ -1272,7 +1296,8 @@ function runTabHook(tab) {
   else if (tab === 'risk') { renderRiskExposure(); loadEtfLookThrough(); }
   else if (tab === 'concentration') renderConcentration();
   else if (tab === 'transactions') renderTransactions();
-  else if (tab === 'benchmark') renderPerformanceTab();
+  else if (tab === 'perfme') renderPerfMe();
+  else if (tab === 'benchmark') renderVsEtfs();
 }
 function showTab(tab, btn) {
   currentTab = tab;
@@ -1777,6 +1802,7 @@ let perfBenchmarks = ['SPY'];
 let perfSeries = null;              // {dates, value[], contrib[], mv[]}
 const _benchSeriesCache = {};       // ticker -> value[] aligned to perfSeries.dates
 let perfChartRef = null;
+let perfMeChartRef = null;
 let _perfLoading = false;
 const BENCH_COLORS = { SPY:'#4ade80', QQQ:'#9fc4ff', QQQM:'#f0c75e', VOO:'#a78bfa', DIA:'#f472b6', IWM:'#22d3ee' };
 const _BENCH_PALETTE = ['#a78bfa','#f472b6','#22d3ee','#fb923c','#34d399','#e879f9'];
@@ -1944,11 +1970,32 @@ function _perfSliceRange(){
   if(perfPeriod==='ALL') return [0,n];
   let cutKey;
   if(perfPeriod==='YTD'){ cutKey=(new Date().getFullYear())+'-01-01'; }
-  else { const days={'1M':31,'3M':93,'6M':186,'1Y':372}[perfPeriod]||99999;
+  else { const days={'1W':7,'1M':31,'3M':93,'6M':186,'1Y':372,'3Y':1116,'5Y':1860}[perfPeriod]||99999;
     const cut=new Date(); cut.setDate(cut.getDate()-days); cutKey=cut.toISOString().slice(0,10); }
   let i=dates.findIndex(d=>d>=cutKey); if(i<0)i=n-1; if(i<0)i=0;
   return [i,n];
 }
+// cumulative portfolio time-weighted return SERIES (%) over [a,b], indexed to 0% at a
+function _portfolioTWRSeries(a,b){
+  if(!perfSeries||b-a<2) return null;
+  const val=perfSeries.value, con=perfSeries.contrib;
+  const out=[0]; let idx=1;
+  for(let k=a+1;k<b;k++){ const flow=(con[k]||0)-(con[k-1]||0); const denom=(val[k-1]||0)+flow;
+    if(denom>1e-6) idx*=(val[k]/denom); out.push((idx-1)*100); }
+  return out;
+}
+// benchmark cumulative total-return SERIES (%) aligned to dates[a..b), indexed to 0% at a
+function _benchReturnSeries(tk,a,b){
+  const h=_histCache[tk]; if(!h||!perfSeries) return null;
+  const px=(h.adj&&h.adj.length===h.dates.length)?h.adj:h.closes;
+  const dates=perfSeries.dates;
+  const aligned=[]; let i=0,lp=null;
+  for(let k=a;k<b;k++){ const d=dates[k]; while(i<h.dates.length&&h.dates[i]<=d){lp=px[i];i++;} aligned.push(lp); }
+  const base=aligned.find(p=>p!=null); if(base==null)return null;
+  return aligned.map(p=>p!=null?(p/base-1)*100:null);
+}
+function _activatePeriod(rowId){ const row=document.getElementById(rowId); if(!row)return;
+  row.querySelectorAll('.period-btn').forEach(b=>b.classList.toggle('active', b.textContent.trim()===perfPeriod)); }
 // Portfolio TIME-WEIGHTED return over the sliced window [a,b] — flow-neutral (removes the effect
 // of deposits/withdrawals), so it's directly comparable to a benchmark's return over the same window.
 function _portfolioTWR(a,b){
@@ -1973,47 +2020,83 @@ function _benchReturnWindow(tk,a,b){
   if(p0==null||p1==null||p0<=0) return null;
   return (p1/p0-1)*100;
 }
-async function renderPerformanceTab(){
-  const host=document.getElementById('perfChart'); if(!host) return;
+async function _ensurePerfSeries(){
   if(!perfSeries && !_perfLoading){
     _perfLoading=true;
-    const st=document.getElementById('perfStatus'); if(st)st.textContent='Loading price history…';
-    try{
-      await _fetchMany(perfHoldingTickers());
-      await _fetchMany(perfBenchmarks);
-      buildPerfSeries();
-    }catch(e){ console.warn('perf build failed',e); }
+    ['perfMeStatus','perfStatus'].forEach(id=>{const e=document.getElementById(id); if(e)e.textContent='Loading price history…';});
+    try{ await _fetchMany(perfHoldingTickers()); await _fetchMany(perfBenchmarks); buildPerfSeries(); }
+    catch(e){ console.warn('perf build failed',e); }
     _perfLoading=false;
-    const st2=document.getElementById('perfStatus'); if(st2)st2.textContent='';
+    ['perfMeStatus','perfStatus'].forEach(id=>{const e=document.getElementById(id); if(e)e.textContent='';});
   }
-  drawPerfChart();
-  renderPerfKpis();
 }
-function drawPerfChart(){
-  const cv=document.getElementById('perfChart'); if(!cv||!window.Chart) return;
-  if(!perfSeries){ return; }
+// ── MY PERFORMANCE (portfolio only: $ account value vs money invested) ─────────
+async function renderPerfMe(){
+  if(!document.getElementById('perfMeChart')) return;
+  await _ensurePerfSeries();
+  _activatePeriod('perfMePeriodRow');
+  drawPerfMeChart(); renderPerfMeKpis();
+}
+function drawPerfMeChart(){
+  const cv=document.getElementById('perfMeChart'); if(!cv||!window.Chart||!perfSeries) return;
   const [a,b]=_perfSliceRange();
   const dates=perfSeries.dates.slice(a,b);
   const ds=[
-    { label:'Net Contributions', data:perfSeries.contrib.slice(a,b), borderColor:'#94a3b8', backgroundColor:'rgba(148,163,184,.10)', borderWidth:1.5, borderDash:[5,4], pointRadius:0, fill:true, stepped:false, tension:0 },
-    { label:'Portfolio Value', data:perfSeries.value.slice(a,b), borderColor:'#C9A84C', backgroundColor:'rgba(201,168,76,.10)', borderWidth:2.5, pointRadius:0, fill:true, tension:.15 }
+    { label:'Money Invested', data:perfSeries.contrib.slice(a,b), borderColor:'#94a3b8', backgroundColor:'rgba(148,163,184,.10)', borderWidth:1.5, borderDash:[5,4], pointRadius:0, fill:true, tension:0 },
+    { label:'Portfolio Value', data:perfSeries.value.slice(a,b), borderColor:'#C9A84C', backgroundColor:'rgba(201,168,76,.12)', borderWidth:2.5, pointRadius:0, fill:true, tension:.15 }
   ];
-  perfBenchmarks.forEach((tk,i)=>{ const s=computeBenchValueSeries(tk); if(!s)return;
-    const col=BENCH_COLORS[tk]||_BENCH_PALETTE[i%_BENCH_PALETTE.length];
-    ds.push({ label:tk+' (same contributions)', data:s.slice(a,b), borderColor:col, backgroundColor:'transparent', borderWidth:1.8, borderDash:[2,2], pointRadius:0, fill:false, tension:.15 });
-  });
-  if(perfChartRef) perfChartRef.destroy();
-  perfChartRef=new Chart(cv.getContext('2d'),{
-    type:'line',
-    data:{ labels:dates, datasets:ds },
+  if(perfMeChartRef) perfMeChartRef.destroy();
+  perfMeChartRef=new Chart(cv.getContext('2d'),{ type:'line', data:{labels:dates,datasets:ds},
     options:{ responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
-      plugins:{ legend:{ display:true, labels:{ boxWidth:12, font:{size:11}, color:'#cbd5e1' } },
-        tooltip:{ callbacks:{ label:(c)=> c.dataset.label+': '+(c.parsed.y==null?'—':'$'+Math.round(c.parsed.y).toLocaleString()) } } },
-      scales:{ x:{ ticks:{ maxTicksLimit:8, color:'#7f93ad', font:{size:10} }, grid:{ color:'rgba(29,54,82,.4)' } },
-        y:{ ticks:{ color:'#7f93ad', font:{size:10}, callback:(v)=>'$'+(v>=1000?(v/1000).toFixed(0)+'K':v) }, grid:{ color:'rgba(29,54,82,.5)' } } } }
-  });
+      plugins:{ legend:{display:true,labels:{boxWidth:12,font:{size:11},color:'#cbd5e1'}},
+        tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+(c.parsed.y==null?'—':'$'+Math.round(c.parsed.y).toLocaleString())}} },
+      scales:{ x:{ticks:{maxTicksLimit:8,color:'#7f93ad',font:{size:10}},grid:{color:'rgba(29,54,82,.4)'}},
+        y:{ticks:{color:'#7f93ad',font:{size:10},callback:(v)=>'$'+(v>=1000?(v/1000).toFixed(0)+'K':v)},grid:{color:'rgba(29,54,82,.5)'}} } } });
+  const note=document.getElementById('perfMeNote');
+  if(note) note.textContent='Your total account value (holdings + cash, including dividends received) reconstructed from '+TRANSACTIONS.length+' transactions × real daily closing prices, vs. the money you deposited. The gap between the gold and grey lines is genuine investment gain — not cash you added.';
+}
+function renderPerfMeKpis(){
+  const el=document.getElementById('perfMeKpis'); if(!el||!perfSeries) return;
+  const n=perfSeries.value.length; if(!n)return;
+  const [a,b]=_perfSliceRange();
+  const val=perfSeries.value[n-1], contrib=perfSeries.contrib[n-1];
+  const gain=val-contrib, gainPct=contrib?gain/contrib*100:0;
+  const plabel=perfPeriod==='ALL'?'Since Inception':perfPeriod;
+  const twr=_portfolioTWR(a,b);
+  const pct=(v)=> v==null?'—':((v>=0?'+':'')+v.toFixed(1)+'%');
+  el.innerHTML=
+    _meKpi(plabel+' Return', pct(twr), 'time-weighted return', true)+
+    _meKpi('Portfolio Value', '$'+fmt(val), 'incl. cash & dividends', true)+
+    _meKpi('Net Invested', '$'+fmt(contrib), 'deposits − withdrawals')+
+    _meKpi('Total Gain', (gain>=0?'+$':'-$')+fmt(Math.abs(gain)), pct(gainPct)+' on money in');
+}
+// ── VS ETFs (time-weighted % return of your holdings vs each ETF) ──────────────
+async function renderVsEtfs(){
+  if(!document.getElementById('perfChart')) return;
+  await _ensurePerfSeries();
+  await _fetchMany(perfBenchmarks);
+  _activatePeriod('perfPeriodRow');
+  drawVsEtfsChart(); renderPerfKpis();
+}
+function renderPerformanceTab(){ return renderVsEtfs(); }   // legacy alias (upload/refresh hooks)
+function drawVsEtfsChart(){
+  const cv=document.getElementById('perfChart'); if(!cv||!window.Chart||!perfSeries) return;
+  const [a,b]=_perfSliceRange();
+  const dates=perfSeries.dates.slice(a,b);
+  const mine=_portfolioTWRSeries(a,b);
+  const ds=[{ label:'My Portfolio', data:mine, borderColor:'#C9A84C', backgroundColor:'rgba(201,168,76,.10)', borderWidth:2.6, pointRadius:0, fill:false, tension:.15 }];
+  perfBenchmarks.forEach((tk,i)=>{ const s=_benchReturnSeries(tk,a,b); if(!s)return;
+    const col=BENCH_COLORS[tk]||_BENCH_PALETTE[i%_BENCH_PALETTE.length];
+    ds.push({ label:tk, data:s, borderColor:col, backgroundColor:'transparent', borderWidth:1.8, borderDash:[5,3], pointRadius:0, fill:false, tension:.15 }); });
+  if(perfChartRef) perfChartRef.destroy();
+  perfChartRef=new Chart(cv.getContext('2d'),{ type:'line', data:{labels:dates,datasets:ds},
+    options:{ responsive:true, maintainAspectRatio:false, interaction:{mode:'index',intersect:false},
+      plugins:{ legend:{display:true,labels:{boxWidth:12,font:{size:11},color:'#cbd5e1'}},
+        tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+(c.parsed.y==null?'—':(c.parsed.y>=0?'+':'')+c.parsed.y.toFixed(1)+'%')}} },
+      scales:{ x:{ticks:{maxTicksLimit:8,color:'#7f93ad',font:{size:10}},grid:{color:'rgba(29,54,82,.4)'}},
+        y:{ticks:{color:'#7f93ad',font:{size:10},callback:(v)=>(v>=0?'+':'')+v+'%'},grid:{color:'rgba(29,54,82,.5)'}} } } });
   const note=document.getElementById('perfNote');
-  if(note) note.textContent='Reconstructed from '+TRANSACTIONS.length+' transactions × real daily closing prices. Benchmark lines show your identical deposit schedule invested in that ETF instead (total return, dividends reinvested). Your portfolio value includes cash dividends received.';
+  if(note) note.textContent='Each line is a time-weighted % return indexed to 0% at the start of the window: YOUR holdings vs. what each ETF returned (total return, dividends reinvested) over the same period. This isolates stock-picking — it ignores when you added cash, so it fairly answers "did my picks beat the index?"';
 }
 function renderPerfKpis(){
   const el=document.getElementById('perfKpis'); if(!el||!perfSeries) return;
@@ -2035,14 +2118,14 @@ function renderPerfKpis(){
     _meKpi(plabel+' Return', pct(twr), 'your time-weighted return', true)+
     benchCards;
 }
-function setPerfPeriod(p,btn){ perfPeriod=p; document.querySelectorAll('#perfPeriodRow .period-btn').forEach(b=>b.classList.remove('active')); if(btn)btn.classList.add('active'); drawPerfChart(); renderPerfKpis(); }
+function setPerfPeriod(p,btn){ perfPeriod=p; if(btn){ btn.parentElement.querySelectorAll('.period-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); } if(typeof currentTab!=='undefined' && currentTab==='perfme') renderPerfMe(); else renderVsEtfs(); }
 async function togglePerfBench(tk,btn){
   tk=tk.toUpperCase();
   const i=perfBenchmarks.indexOf(tk);
   if(i>=0){ perfBenchmarks.splice(i,1); if(btn)btn.classList.remove('active'); }
   else { perfBenchmarks.push(tk); if(btn)btn.classList.add('active');
     if(!_histCache[tk]){ const st=document.getElementById('perfStatus'); if(st)st.textContent='Loading '+tk+'…'; await fetchHist(tk); if(st)st.textContent=''; } }
-  drawPerfChart(); renderPerfKpis();
+  drawVsEtfsChart(); renderPerfKpis();
 }
 async function addPerfBench(){
   const inp=document.getElementById('perfBenchInput'); if(!inp)return; const tk=(inp.value||'').trim().toUpperCase(); if(!tk)return;
@@ -2055,7 +2138,7 @@ async function addPerfBench(){
   // add a toggle chip so it can be removed
   const row=document.getElementById('perfBenchRow'); const inputEl=document.getElementById('perfBenchInput');
   if(row&&inputEl){ const chip=document.createElement('button'); chip.className='filter-btn active'; chip.dataset.bench=tk; chip.textContent=tk; chip.onclick=function(){ togglePerfBench(tk,this); if(!perfBenchmarks.includes(tk)) this.remove(); }; row.insertBefore(chip,inputEl); }
-  drawPerfChart(); renderPerfKpis();
+  drawVsEtfsChart(); renderPerfKpis();
 }
 
 // ── WHAT-IF MULTI-TRADE ───────────────────────────────────────────────────────
