@@ -1828,7 +1828,7 @@ function buildPerfSeries(){
   const value=[],contribArr=[],mvArr=[];
   for(const d of masterDates){
     for(const t of tks){ const h=_histCache[t]; while(ptr[t]<h.dates.length && h.dates[ptr[t]]<=d){ last[t]=h.closes[ptr[t]]; ptr[t]++; } }
-    while(ti<txs.length && (txs[ti].date||'')<=d){ const t=txs[ti]; const a=t.action, amt=Number(t.amount);
+    while(ti<txs.length && (txs[ti].date||'')<=d){ const t=txs[ti]; const a=t.action, amt=_txSignedAmount(t);
       if(!isNaN(amt)) cash+=amt;
       if((a==='Buy'||a==='Sell'||a==='Journal') && t.ticker && t.shares!=null){ const sgn=(a==='Sell')?-1:1; shares[t.ticker]=(shares[t.ticker]||0)+sgn*Number(t.shares); }
       if(a==='Deposit'||a==='Withdrawal'){ if(!isNaN(amt)) contrib+=amt; }
@@ -3257,7 +3257,16 @@ function deriveHoldingsFromTx(txList, running){
 // Running CASH balance from the ledger = Σ of every signed Amount (deposits +, buys −, sells +,
 // dividends +, interest +, withdrawals −, fees −, option premiums ±). Assumes the log starts from
 // account funding (it does). Dividends/interest are cash inflows, so they land in this balance.
-function _computeCash(txArr){ let c=0; (txArr||TRANSACTIONS).forEach(t=>{ const a=Number(t.amount); if(!isNaN(a)) c+=a; }); return Math.round(c*100)/100; }
+// Signed cash impact of a transaction. Uses the Amount column if present; otherwise, for a
+// Buy/Sell with shares & price, computes it (Buy = −shares×price, Sell = +shares×price). This
+// lets the simplified manual sheet leave Amount blank on trades and only fill it for deposits/dividends.
+function _txSignedAmount(t){
+  const a=Number(t.amount); if(!isNaN(a)) return a;
+  const sh=Number(t.shares), px=Number(t.price), act=(t.action||'').toLowerCase();
+  if(!isNaN(sh)&&!isNaN(px)&&sh&&px){ if(act.indexOf('sell')>=0) return sh*px; if(act.indexOf('buy')>=0) return -sh*px; }
+  return NaN;
+}
+function _computeCash(txArr){ let c=0; (txArr||TRANSACTIONS).forEach(t=>{ const a=_txSignedAmount(t); if(!isNaN(a)) c+=a; }); return Math.round(c*100)/100; }
 function _totalDividends(txArr){ let d=0; (txArr||TRANSACTIONS).forEach(t=>{ if((t.action==='Dividend'||t.action==='Income')){ const a=Number(t.amount); if(!isNaN(a)&&a>0) d+=a; } }); return Math.round(d*100)/100; }
 function _saveMaxPortfolio(txR){
   try{ localStorage.setItem('me_portfolio_v1', JSON.stringify({ equities:RAW.endowment.equities, etfs:RAW.endowment.etfs, cash:RAW.endowment.cash||0, transactions:(txR&&txR.length)?TRANSACTIONS.slice():null, savedAt:new Date().toISOString() })); }
