@@ -908,16 +908,19 @@ function loadSavedFund() {
   if (saved === 'endowment' || saved === 'cee') activeFund = saved;
 }
 
+const DUST_MIN = 5;   // hide "dust" positions worth under $5 (leftover fractions from buy/sell rounding — not real holdings)
 function buildState() {
   const fund = activeFund === 'endowment' ? RAW.endowment : RAW.ceeFund;
+  const eqs = (fund.equities||[]).filter(h => (h.marketValue||0) >= DUST_MIN);
+  const etfs2 = (fund.etfs||[]).filter(h => (h.marketValue||0) >= DUST_MIN);
   const bonds = getNormalizedBondPositions(fund);   // direct Treasuries as first-class holdings
-  const all = [...fund.equities, ...fund.etfs, ...bonds];
+  const all = [...eqs, ...etfs2, ...bonds];
   const total = all.reduce((s,h) => s+(h.marketValue||0), 0) + (fund.cash||0);
   const equityTotal=all.filter(h=>!['Broad Market','Fixed Income'].includes(h.sector)).reduce((s,h)=>s+(h.marketValue||0),0)||1;
   // TOTAL-FUND beta: bonds/fixed income + cash dampen risk at beta 0; missing equity betas
   // stay excluded (coverage). This is the fund's headline risk number.
   const betaRes = calculateFundBeta(all, fund.cash||0);
-  S = { holdings:all, equities:fund.equities, etfs:fund.etfs, cash:fund.cash,
+  S = { holdings:all, equities:eqs, etfs:etfs2, cash:fund.cash,
     bond: activeFund==='endowment'?fund.bond:null, total, equityTotal, fund:activeFund,
     fundName: activeFund==='endowment'?'Max Evans Portfolio':'-',
     beta: betaRes.beta, betaCoverage: betaRes.coverage };
@@ -1762,11 +1765,14 @@ function renderTxKpis(){
 }
 function renderTxTable(){
   let rows=TRANSACTIONS.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  let hiddenSmall=0;
   rows=rows.filter(t=>{
     if(txFilter==='other'){ if(TX_MAIN.has(t.action))return false; }
     else if(txFilter!=='all'){ if(t.action!==txFilter)return false; }
     if(txYear!=='all' && (t.date||'').slice(0,4)!==txYear) return false;
     if(txSearch && !((t.ticker||'').toUpperCase().includes(txSearch))) return false;
+    // hide tiny buy/sell trades under $25 (fractional-rounding dust) — deposits, dividends, etc. always show
+    if((t.action==='Buy'||t.action==='Sell') && Math.abs(Number(t.amount)||0) < 25){ hiddenSmall++; return false; }
     return true;
   });
   const tbl=document.getElementById('txTable'); if(!tbl)return;
@@ -1787,7 +1793,7 @@ function renderTxTable(){
     return '<tr><td>'+_txFmtDate(r.date)+'</td><td>'+_txActionBadge(r.action)+'</td><td class="ticker-cell">'+(r.ticker||'—')+'</td><td style="text-align:right">'+sh+'</td><td style="text-align:right">'+px+'</td><td style="text-align:right">'+pxNow+'</td><td style="text-align:right">'+vsCell+'</td><td style="text-align:right">'+amtCell+'</td></tr>';
   }).join('');
   tbl.innerHTML='<thead><tr><th>Date</th><th>Action</th><th>Ticker</th><th style="text-align:right">Shares</th><th style="text-align:right" title="Your price at the time of the trade">Trade Price</th><th style="text-align:right" title="Current market price">Price Now</th><th style="text-align:right" title="Move vs your trade price. Green = smart trade: bought before a rise, or sold before a drop.">vs Now</th><th style="text-align:right">Amount</th></tr></thead><tbody>'+body+'</tbody>';
-  const cnt=document.getElementById('txCount'); if(cnt)cnt.textContent='Showing '+rows.length+' of '+TRANSACTIONS.length+' transactions';
+  const cnt=document.getElementById('txCount'); if(cnt)cnt.textContent='Showing '+rows.length+' of '+TRANSACTIONS.length+' transactions'+(hiddenSmall?' · '+hiddenSmall+' small buy/sell under $25 hidden':'');
 }
 
 // ── PERFORMANCE ENGINE ────────────────────────────────────────────────────────
