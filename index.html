@@ -2062,7 +2062,7 @@ function drawPerfMeChart(){
       scales:{ x:{ticks:{maxTicksLimit:8,color:'#7f93ad',font:{size:10}},grid:{color:'rgba(29,54,82,.4)'}},
         y:{ticks:{color:'#7f93ad',font:{size:10},callback:(v)=>'$'+(v>=1000?(v/1000).toFixed(0)+'K':v)},grid:{color:'rgba(29,54,82,.5)'}} } } });
   const note=document.getElementById('perfMeNote');
-  if(note) note.textContent='Your total account value (holdings + cash, including dividends received) reconstructed from '+TRANSACTIONS.length+' transactions × real daily closing prices, vs. the money you deposited. The gap between the gold and grey lines is genuine investment gain — not cash you added.';
+  if(note) note.textContent='Gold = total account value (holdings + cash + dividends); grey = money you deposited. The gap is your real dollar gain. "Total Gain" is that gain on every dollar you put in; "Holdings Gain" is the unrealized gain on what you hold now (the figure SoFi shows). "Picks" is a time-weighted % that rates stock selection for the SPY comparison — it ignores deposit size/timing, so it reads much higher and is not your money’s growth.';
 }
 function renderPerfMeKpis(){
   const el=document.getElementById('perfMeKpis'); if(!el||!perfSeries) return;
@@ -2074,10 +2074,10 @@ function renderPerfMeKpis(){
   const twr=_portfolioTWR(a,b);
   const pct=(v)=> v==null?'—':((v>=0?'+':'')+v.toFixed(1)+'%');
   el.innerHTML=
-    _meKpi(plabel+' Return', pct(twr), 'time-weighted return', true)+
+    _meKpi('Total Gain', (gain>=0?'+$':'-$')+fmt(Math.abs(gain)), pct(gainPct)+' on the money you put in', true)+
     _meKpi('Portfolio Value', '$'+fmt(val), 'incl. cash & dividends', true)+
     _meKpi('Net Invested', '$'+fmt(contrib), 'deposits − withdrawals')+
-    _meKpi('Total Gain', (gain>=0?'+$':'-$')+fmt(Math.abs(gain)), pct(gainPct)+' on money in');
+    _meKpi('Picks ('+plabel+')', pct(twr), 'time-weighted · stock-picking vs market, not your $ gain');
 }
 // ── VS ETFs (time-weighted % return of your holdings vs each ETF) ──────────────
 async function renderVsEtfs(){
@@ -2124,7 +2124,7 @@ function renderPerfKpis(){
   el.innerHTML=
     _meKpi('Portfolio Value', '$'+fmt(val), 'incl. cash & dividends', true)+
     _meKpi('Net Invested', '$'+fmt(contrib), 'deposits − withdrawals')+
-    _meKpi(plabel+' Return', pct(twr), 'your time-weighted return', true)+
+    _meKpi(plabel+' (picks)', pct(twr), 'time-weighted — stock-picking vs the index, not your $ gain', true)+
     benchCards;
 }
 function setPerfPeriod(p,btn){ perfPeriod=p; if(btn){ btn.parentElement.querySelectorAll('.period-btn').forEach(b=>b.classList.remove('active')); btn.classList.add('active'); } if(typeof currentTab!=='undefined' && currentTab==='perfme') renderPerfMe(); else renderVsEtfs(); }
