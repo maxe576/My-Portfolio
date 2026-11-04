@@ -415,6 +415,7 @@ tr:hover td{background:rgba(212,167,44,.06)}
       <button class="period-btn" onclick="setPerfPeriod('1Y',this)">1Y</button>
       <button class="period-btn" onclick="setPerfPeriod('3Y',this)">3Y</button>
       <button class="period-btn" onclick="setPerfPeriod('5Y',this)">5Y</button>
+      <button class="period-btn" onclick="setPerfPeriod('ALL',this)" title="Since your account was created vs SPY over the same span">Max</button>
       <span id="perfMeStatus" class="period-loading"></span>
     </div>
     <div class="chart-container" style="height:360px"><canvas id="perfMeChart"></canvas></div>
@@ -437,6 +438,7 @@ tr:hover td{background:rgba(212,167,44,.06)}
       <button class="period-btn" onclick="setPerfPeriod('1Y',this)">1Y</button>
       <button class="period-btn" onclick="setPerfPeriod('3Y',this)">3Y</button>
       <button class="period-btn" onclick="setPerfPeriod('5Y',this)">5Y</button>
+      <button class="period-btn" onclick="setPerfPeriod('ALL',this)" title="Since your account was created vs SPY over the same span">Max</button>
       <span id="perfStatus" class="period-loading"></span>
     </div>
     <div class="filter-row" id="perfBenchRow" style="align-items:center">
@@ -2002,7 +2004,7 @@ function _benchReturnSeries(tk,a,b){
   return aligned.map(p=>p!=null?(p/base-1)*100:null);
 }
 function _activatePeriod(rowId){ const row=document.getElementById(rowId); if(!row)return;
-  row.querySelectorAll('.period-btn').forEach(b=>b.classList.toggle('active', b.textContent.trim()===perfPeriod)); }
+  row.querySelectorAll('.period-btn').forEach(b=>{ const t=b.textContent.trim(); b.classList.toggle('active', t===perfPeriod || (perfPeriod==='ALL'&&t==='Max')); }); }
 // Portfolio TIME-WEIGHTED return over the sliced window [a,b] — flow-neutral (removes the effect
 // of deposits/withdrawals), so it's directly comparable to a benchmark's return over the same window.
 function _portfolioTWR(a,b){
